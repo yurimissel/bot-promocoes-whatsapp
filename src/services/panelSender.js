@@ -1,12 +1,22 @@
 const { MessageMedia } = require('whatsapp-web.js');
 const store = require('./panelStore');
-const { discoverGroups, isGroupId } = require('./groupDiscovery');
+const { isGroupId } = require('./groupDiscovery');
 const logger = require('../utils/logger');
 
 let chain = Promise.resolve();
 
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function withTimeout(promise, milliseconds, label) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} excedeu ${milliseconds / 1000}s.`)), milliseconds);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 function shuffle(items) {
@@ -51,16 +61,82 @@ async function downloadImage(imageUrl) {
   }
 }
 
-async function verifyGroups(client, groupIds) {
-  const customGroups = store.getSettings().customGroups || [];
-  const discovery = await discoverGroups(client, customGroups);
-  const available = new Set(discovery.groups.map((group) => group.id));
-  return groupIds.filter((id) => isGroupId(id) && available.has(id));
+function friendlySendError(error) {
+  const message = String((error && error.message) || 'Falha desconhecida no WhatsApp.');
+  if (/not a participant|not in (the )?group/i.test(message)) {
+    return new Error('O número conectado não participa mais deste grupo.');
+  }
+  if (/only admins|read.?only|not allowed|permission/i.test(message)) {
+    return new Error('Este WhatsApp não tem permissão para enviar mensagens nesse grupo.');
+  }
+  if (/target closed|session closed|execution context was destroyed/i.test(message)) {
+    return new Error('A sessão do WhatsApp reiniciou durante o envio. Reconecte e tente novamente.');
+  }
+  if (/evaluation failed|widfactory|serialize/i.test(message)) {
+    return new Error(`O WhatsApp Web recusou o envio. Reconecte a sessão e tente novamente. Detalhe: ${message}`);
+  }
+  return new Error(message);
+}
+
+async function resolveSendableChat(client, groupId) {
+  if (!isGroupId(groupId)) throw new Error('O destino selecionado não é um grupo do WhatsApp.');
+  const state = await withTimeout(client.getState(), 12000, 'Verificação da conexão');
+  if (state !== 'CONNECTED') throw new Error(`WhatsApp sem conexão no momento do envio (${state || 'desconectado'}).`);
+
+  const chat = await withTimeout(client.getChatById(groupId), 20000, 'Abertura do grupo');
+  if (!chat || !chat.isGroup) throw new Error('O grupo selecionado não está mais disponível nesta conta.');
+  if (chat.isReadOnly) throw new Error('Este WhatsApp não tem permissão para enviar mensagens nesse grupo.');
+  return chat;
+}
+
+async function simulateTyping(chat, groupId) {
+  try {
+    if (chat && typeof chat.sendStateTyping === 'function') await chat.sendStateTyping();
+    await wait(1000 + Math.floor(Math.random() * 1400));
+    if (chat && typeof chat.clearState === 'function') await chat.clearState();
+  } catch (error) {
+    logger.warn(`[Envio] Digitação indisponível em ${groupId}; continuando o envio:`, error.message);
+  }
+}
+
+async function sendConfirmedMessage(client, groupId, media, caption) {
+  let message;
+  let mediaError = '';
+  if (media) {
+    try {
+      message = await withTimeout(
+        client.sendMessage(groupId, media, {
+          caption,
+          sendSeen: false,
+          waitUntilMsgSent: true,
+        }),
+        60000,
+        'Envio da foto'
+      );
+    } catch (error) {
+      mediaError = error.message;
+      logger.warn(`[Envio] Foto falhou em ${groupId}; tentando somente o texto:`, error.message);
+    }
+  }
+
+  if (!message) {
+    message = await withTimeout(
+      client.sendMessage(groupId, caption, {
+        sendSeen: false,
+        waitUntilMsgSent: true,
+      }),
+      45000,
+      'Envio da mensagem'
+    );
+  }
+
+  if (!message) throw new Error('O WhatsApp não confirmou a criação da mensagem.');
+  return { message, mode: media && !mediaError ? 'photo' : 'text', mediaError };
 }
 
 async function runJob(client, job, options) {
   const products = store.getProducts(job.productIds);
-  const groups = await verifyGroups(client, job.groupIds);
+  const groups = job.groupIds.filter(isGroupId);
   const orderedProducts = options.shuffle ? shuffle(products) : products;
   const template = options.template || store.getSettings().template;
   const delayMs = Math.min(3600, Math.max(10, Number(options.delaySeconds || 120))) * 1000;
@@ -77,6 +153,9 @@ async function runJob(client, job, options) {
   let completed = 0;
   let failed = 0;
   const errors = [];
+  const deliveries = [];
+  const totalDeliveries = orderedProducts.length * groups.length;
+  let processedDeliveries = 0;
 
   for (let productIndex = 0; productIndex < orderedProducts.length; productIndex += 1) {
     const product = orderedProducts[productIndex];
@@ -87,35 +166,52 @@ async function runJob(client, job, options) {
 
     for (const groupId of groups) {
       try {
-        const chat = await client.getChatById(groupId);
-        await chat.sendStateTyping();
-        await wait(1200 + Math.floor(Math.random() * 1800));
-        await chat.clearState();
-
-        if (media) {
-          await client.sendMessage(groupId, media, { caption });
-        } else {
-          await client.sendMessage(groupId, caption);
-        }
+        const chat = await resolveSendableChat(client, groupId);
+        await simulateTyping(chat, groupId);
+        const sent = await sendConfirmedMessage(client, groupId, media, caption);
         completed += 1;
+        deliveries.push({
+          productId: product.id,
+          groupId,
+          status: 'sent',
+          messageId: sent.message.id && sent.message.id._serialized ? sent.message.id._serialized : '',
+          mode: sent.mode,
+          warning: sent.mediaError ? `A foto falhou; o texto foi enviado. ${sent.mediaError}` : '',
+          sentAt: new Date().toISOString(),
+        });
       } catch (error) {
+        const friendlyError = friendlySendError(error);
         failed += 1;
-        errors.push(`${product.title}: ${error.message}`);
-        logger.error(`[Envio] Falha em ${groupId}:`, error.message);
+        errors.push(`${product.title}: ${friendlyError.message}`);
+        deliveries.push({
+          productId: product.id,
+          groupId,
+          status: 'failed',
+          error: friendlyError.message,
+          sentAt: new Date().toISOString(),
+        });
+        logger.error(`[Envio] Falha em ${groupId}:`, friendlyError.message);
       }
-      store.updateJob(job.id, { completed, failed, errors: errors.slice(-10) });
+      store.updateJob(job.id, {
+        completed,
+        failed,
+        errors: errors.slice(-10),
+        deliveries: deliveries.slice(-100),
+      });
+      processedDeliveries += 1;
+      if (processedDeliveries < totalDeliveries) await wait(delayMs);
     }
 
     if (completed > completedBeforeProduct) store.markProductSent(product.id);
-    if (productIndex < orderedProducts.length - 1) await wait(delayMs);
   }
 
   store.updateJob(job.id, {
-    status: failed > 0 && completed === 0 ? 'failed' : 'completed',
+    status: failed > 0 && completed === 0 ? 'failed' : (failed > 0 ? 'partial' : 'completed'),
     completed,
     failed,
     currentProduct: '',
     errors: errors.slice(-10),
+    deliveries: deliveries.slice(-100),
     finishedAt: new Date().toISOString(),
   });
 }
@@ -135,4 +231,11 @@ function enqueueJob(client, options) {
   return job;
 }
 
-module.exports = { enqueueJob, renderTemplate, shuffle };
+module.exports = {
+  enqueueJob,
+  renderTemplate,
+  shuffle,
+  sendConfirmedMessage,
+  resolveSendableChat,
+  friendlySendError,
+};

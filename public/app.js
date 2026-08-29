@@ -7,6 +7,13 @@ const state = {
   selectedGroups: new Set(),
   shuffle: false,
   ready: false,
+  authenticated: false,
+  user: null,
+  authMode: 'login',
+  authSettings: null,
+  appLoaded: false,
+  initialProductsLoaded: false,
+  watchedJobs: new Set(),
   status: null,
   groupsLoading: false,
   activeView: 'offers',
@@ -53,6 +60,29 @@ const elements = {
   messagePreview: document.getElementById('messagePreview'),
   overviewJobs: document.getElementById('overviewJobs'),
   toastRegion: document.getElementById('toastRegion'),
+  authOverlay: document.getElementById('authOverlay'),
+  authForm: document.getElementById('authForm'),
+  authTitle: document.getElementById('authTitle'),
+  authSubtitle: document.getElementById('authSubtitle'),
+  loginTab: document.getElementById('loginTab'),
+  signupTab: document.getElementById('signupTab'),
+  nameField: document.getElementById('nameField'),
+  confirmPasswordField: document.getElementById('confirmPasswordField'),
+  accessCodeField: document.getElementById('accessCodeField'),
+  authName: document.getElementById('authName'),
+  authEmail: document.getElementById('authEmail'),
+  authPassword: document.getElementById('authPassword'),
+  authPasswordConfirm: document.getElementById('authPasswordConfirm'),
+  authAccessCode: document.getElementById('authAccessCode'),
+  authSubmit: document.getElementById('authSubmit'),
+  authFeedback: document.getElementById('authFeedback'),
+  authConfigError: document.getElementById('authConfigError'),
+  userCard: document.getElementById('userCard'),
+  userAvatar: document.getElementById('userAvatar'),
+  userName: document.getElementById('userName'),
+  userEmail: document.getElementById('userEmail'),
+  logoutButton: document.getElementById('logoutButton'),
+  togglePassword: document.getElementById('togglePassword'),
 };
 
 function escapeHtml(value) {
@@ -82,7 +112,15 @@ async function api(path, options = {}) {
     },
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Erro ${response.status}`);
+  if (!response.ok) {
+    if (response.status === 401 && !['/api/auth/login', '/api/auth/signup', '/api/auth/me'].includes(path)) {
+      state.authenticated = false;
+      showAuth('Sua sessão terminou. Entre novamente.');
+    }
+    const error = new Error(data.error || `Erro ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }
 
@@ -92,6 +130,105 @@ function toast(message, type = '') {
   item.textContent = message;
   elements.toastRegion.appendChild(item);
   setTimeout(() => item.remove(), 4200);
+}
+
+function setAuthFeedback(message = '', type = 'error') {
+  elements.authFeedback.hidden = !message;
+  elements.authFeedback.textContent = message;
+  elements.authFeedback.classList.toggle('success', type === 'success');
+}
+
+function renderUser() {
+  const user = state.user || {};
+  const displayName = user.name || String(user.email || '').split('@')[0] || 'Usuário';
+  elements.userName.textContent = displayName;
+  elements.userEmail.textContent = user.email || '—';
+  elements.userAvatar.textContent = displayName.trim().slice(0, 1).toUpperCase() || 'U';
+  elements.userCard.hidden = !state.authenticated;
+}
+
+function showAuth(message = '') {
+  elements.authOverlay.hidden = false;
+  elements.connectionOverlay.hidden = true;
+  elements.userCard.hidden = true;
+  if (message) setAuthFeedback(message, 'error');
+}
+
+function hideAuth() {
+  setAuthFeedback('');
+  elements.authOverlay.hidden = true;
+  renderUser();
+}
+
+function setAuthMode(mode) {
+  const signup = mode === 'signup' && state.authSettings && state.authSettings.allowSignups;
+  state.authMode = signup ? 'signup' : 'login';
+  elements.loginTab.classList.toggle('active', !signup);
+  elements.signupTab.classList.toggle('active', signup);
+  elements.loginTab.setAttribute('aria-selected', String(!signup));
+  elements.signupTab.setAttribute('aria-selected', String(signup));
+  elements.nameField.hidden = !signup;
+  elements.confirmPasswordField.hidden = !signup;
+  elements.accessCodeField.hidden = !signup;
+  elements.authName.required = signup;
+  elements.authPasswordConfirm.required = signup;
+  elements.authAccessCode.required = signup;
+  elements.authPassword.autocomplete = signup ? 'new-password' : 'current-password';
+  elements.authTitle.textContent = signup ? 'Criar sua conta' : 'Entrar no painel';
+  elements.authSubtitle.textContent = signup
+    ? 'Cadastre-se com o código de acesso definido pelo administrador.'
+    : 'Use seu e-mail e senha para continuar.';
+  elements.authSubmit.textContent = signup ? 'Criar conta' : 'Entrar';
+  elements.authPassword.value = '';
+  elements.authPasswordConfirm.value = '';
+  elements.authAccessCode.value = '';
+  setAuthFeedback('');
+}
+
+async function startApp() {
+  if (state.appLoaded) return;
+  state.appLoaded = true;
+  try {
+    await refreshAll();
+  } catch (error) {
+    state.appLoaded = false;
+    throw error;
+  }
+}
+
+async function bootstrapAuth() {
+  showAuth();
+  try {
+    state.authSettings = await api('/api/auth/settings');
+  } catch (error) {
+    elements.authConfigError.hidden = false;
+    elements.authConfigError.textContent = `Não foi possível carregar a autenticação: ${error.message}`;
+    elements.authSubmit.disabled = true;
+    return;
+  }
+
+  if (!state.authSettings.configured) {
+    elements.authConfigError.hidden = false;
+    elements.authConfigError.textContent = 'Configure SUPABASE_URL e SUPABASE_PUBLISHABLE_KEY no EasyPanel e implante novamente.';
+    elements.authSubmit.disabled = true;
+    elements.signupTab.hidden = true;
+    return;
+  }
+
+  elements.authConfigError.hidden = true;
+  elements.authSubmit.disabled = false;
+  elements.signupTab.hidden = !state.authSettings.allowSignups;
+  setAuthMode('login');
+
+  try {
+    const result = await api('/api/auth/me');
+    state.authenticated = true;
+    state.user = result.user;
+    hideAuth();
+    await startApp();
+  } catch (error) {
+    if (error.status !== 401) setAuthFeedback(error.message, 'error');
+  }
 }
 
 function setView(view) {
@@ -131,7 +268,7 @@ function formatDate(value) {
 function statusLabel(status) {
   return {
     saved: 'SALVO', sent: 'ENVIADO', queued: 'NA FILA', sending: 'ENVIANDO',
-    completed: 'CONCLUÍDO', failed: 'FALHOU', interrupted: 'INTERROMPIDO',
+    completed: 'CONCLUÍDO', partial: 'PARCIAL', failed: 'FALHOU', interrupted: 'INTERROMPIDO',
   }[status] || String(status || '').toUpperCase();
 }
 
@@ -153,7 +290,7 @@ function renderProducts() {
     const checked = state.selectedProducts.has(product.id);
     const image = safeImage(product.image);
     return `
-      <tr data-product-id="${escapeHtml(product.id)}">
+      <tr class="${checked ? 'selected-row' : ''}" data-product-id="${escapeHtml(product.id)}">
         <td><input type="checkbox" data-product-check="${escapeHtml(product.id)}" ${checked ? 'checked' : ''} aria-label="Selecionar ${escapeHtml(product.title)}"></td>
         <td>
           <div class="product-cell">
@@ -266,8 +403,10 @@ function renderJobs() {
   }
   elements.overviewJobs.innerHTML = state.jobs.slice(0, 6).map((job) => {
     const percent = job.total ? Math.round(((job.completed + job.failed) / job.total) * 100) : 0;
+    const errors = Array.isArray(job.errors) ? job.errors : [];
+    const lastError = errors.length ? errors[errors.length - 1] : '';
     return `<div class="job-item">
-      <div><strong>${job.productIds.length} produto(s) para ${job.groupIds.length} grupo(s)</strong><small>${escapeHtml(formatDate(job.createdAt))} · ${job.completed} enviados · ${job.failed} falhas</small></div>
+      <div><strong>${job.productIds.length} produto(s) para ${job.groupIds.length} grupo(s)</strong><small>${escapeHtml(formatDate(job.createdAt))} · ${job.completed} enviados · ${job.failed} falhas</small>${lastError ? `<small class="job-error">Motivo: ${escapeHtml(lastError)}</small>` : ''}</div>
       <span class="status-tag ${escapeHtml(job.status)}">${escapeHtml(statusLabel(job.status))}</span>
       <div class="job-progress"><span style="width:${Math.min(100, percent)}%"></span></div>
     </div>`;
@@ -317,6 +456,10 @@ async function refreshStatus() {
 async function loadProducts() {
   const data = await api('/api/products');
   state.products = data.products;
+  if (!state.initialProductsLoaded) {
+    state.initialProductsLoaded = true;
+    if (state.products.length === 1) state.selectedProducts.add(state.products[0].id);
+  }
   const valid = new Set(state.products.map((product) => product.id));
   state.selectedProducts.forEach((id) => { if (!valid.has(id)) state.selectedProducts.delete(id); });
   renderProducts();
@@ -355,12 +498,138 @@ async function loadJobs() {
   if (state.activeView === 'overview') renderOverview();
 }
 
+function jobFailureMessage(job) {
+  const errors = Array.isArray(job.errors) ? job.errors.filter(Boolean) : [];
+  return errors.length ? errors[errors.length - 1] : 'O WhatsApp não confirmou o envio.';
+}
+
+async function watchJob(jobId) {
+  if (!jobId || state.watchedJobs.has(jobId)) return;
+  state.watchedJobs.add(jobId);
+  const deadline = Date.now() + (10 * 60 * 1000);
+
+  try {
+    while (state.authenticated && Date.now() < deadline) {
+      await loadJobs();
+      const job = state.jobs.find((item) => item.id === jobId);
+      if (!job) throw new Error('O lote não foi encontrado no histórico.');
+      if (job.status === 'completed' || job.status === 'partial') {
+        if (job.failed > 0) {
+          const message = jobFailureMessage(job);
+          elements.sendTotal.textContent = 'Lote concluído parcialmente';
+          elements.sendDetail.textContent = `${job.completed} enviado(s), ${job.failed} falha(s). ${message}`;
+          toast(`Lote concluído com ${job.completed} envio(s) e ${job.failed} falha(s): ${message}`, 'error');
+        } else {
+          elements.sendTotal.textContent = 'Envio confirmado';
+          elements.sendDetail.textContent = `${job.completed} mensagem${job.completed === 1 ? '' : 'ens'} confirmada${job.completed === 1 ? '' : 's'} pelo WhatsApp.`;
+          toast(`${job.completed} mensagem${job.completed === 1 ? '' : 'ens'} enviada${job.completed === 1 ? '' : 's'} e confirmada${job.completed === 1 ? '' : 's'} pelo WhatsApp.`, 'success');
+        }
+        await loadProducts();
+        return;
+      }
+      if (job.status === 'failed' || job.status === 'interrupted') {
+        const message = jobFailureMessage(job);
+        elements.sendTotal.textContent = 'O envio falhou';
+        elements.sendDetail.textContent = message;
+        toast(`O envio falhou: ${message}`, 'error');
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+    }
+  } catch (error) {
+    toast(`Não foi possível acompanhar o lote: ${error.message}`, 'error');
+  } finally {
+    state.watchedJobs.delete(jobId);
+  }
+}
+
 async function refreshAll() {
   await refreshStatus();
   await Promise.all([loadProducts(), loadSettings(), loadJobs()]);
   if (state.ready) await loadGroups();
   renderOverview();
 }
+
+elements.loginTab.addEventListener('click', () => setAuthMode('login'));
+elements.signupTab.addEventListener('click', () => setAuthMode('signup'));
+
+elements.togglePassword.addEventListener('click', () => {
+  const show = elements.authPassword.type === 'password';
+  [elements.authPassword, elements.authPasswordConfirm, elements.authAccessCode].forEach((input) => {
+    input.type = show ? 'text' : 'password';
+  });
+  elements.togglePassword.textContent = show ? '◌' : '◉';
+  elements.togglePassword.setAttribute('aria-label', show ? 'Ocultar senha' : 'Mostrar senha');
+});
+
+elements.authForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const signup = state.authMode === 'signup';
+  const email = elements.authEmail.value.trim();
+  const password = elements.authPassword.value;
+  const name = elements.authName.value.trim();
+  const accessCode = elements.authAccessCode.value;
+
+  if (!email || !password) return setAuthFeedback('Informe e-mail e senha.');
+  if (password.length < 8) return setAuthFeedback('A senha precisa ter pelo menos 8 caracteres.');
+  if (signup && name.length < 2) return setAuthFeedback('Informe seu nome.');
+  if (signup && password !== elements.authPasswordConfirm.value) {
+    return setAuthFeedback('As senhas não são iguais.');
+  }
+  if (signup && accessCode.length < 8) return setAuthFeedback('Informe o código de acesso.');
+
+  const original = elements.authSubmit.textContent;
+  elements.authSubmit.disabled = true;
+  elements.authSubmit.textContent = signup ? 'Criando conta...' : 'Entrando...';
+  setAuthFeedback('');
+  try {
+    const result = await api(signup ? '/api/auth/signup' : '/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ name, email, password, accessCode }),
+    });
+    if (result.authenticated) {
+      state.authenticated = true;
+      state.user = result.user;
+      hideAuth();
+      await startApp();
+      toast(signup ? 'Conta criada e painel liberado.' : 'Login realizado.', 'success');
+    } else if (result.requiresEmailConfirmation) {
+      setAuthMode('login');
+      elements.authEmail.value = email;
+      setAuthFeedback('Conta criada. Confirme o link enviado ao seu e-mail e depois entre.', 'success');
+    }
+  } catch (error) {
+    setAuthFeedback(error.message, 'error');
+  } finally {
+    elements.authSubmit.disabled = false;
+    elements.authSubmit.textContent = state.authMode === 'signup' ? 'Criar conta' : 'Entrar';
+    if (!state.authSettings || !state.authSettings.configured) {
+      elements.authSubmit.disabled = true;
+      elements.authSubmit.textContent = original;
+    }
+  }
+});
+
+elements.logoutButton.addEventListener('click', async () => {
+  elements.logoutButton.disabled = true;
+  try {
+    await api('/api/auth/logout', { method: 'POST' });
+  } catch (_) {
+    // O cookie local será descartado ao recarregar mesmo se o serviço estiver indisponível.
+  } finally {
+    state.authenticated = false;
+    state.user = null;
+    state.appLoaded = false;
+    state.products = [];
+    state.groups = [];
+    state.jobs = [];
+    state.selectedProducts.clear();
+    state.selectedGroups.clear();
+    elements.logoutButton.disabled = false;
+    setAuthMode('login');
+    showAuth('Você saiu da conta.');
+  }
+});
 
 document.querySelectorAll('.nav-item').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
 document.querySelectorAll('[data-go-offers]').forEach((button) => button.addEventListener('click', () => setView('offers')));
@@ -481,6 +750,7 @@ elements.importButton.addEventListener('click', async () => {
   try {
     const result = await api('/api/products/import', { method: 'POST', body: JSON.stringify({ links }) });
     elements.linkInput.value = '';
+    result.imported.forEach((item) => state.selectedProducts.add(item.id));
     await loadProducts();
     const created = result.imported.filter((item) => item.created).length;
     toast(`${result.imported.length} produto(s) salvo(s)${created < result.imported.length ? ' — alguns já existiam' : ''}.`, 'success');
@@ -502,14 +772,24 @@ elements.productTable.addEventListener('change', (event) => {
 
 elements.productTable.addEventListener('click', async (event) => {
   const id = event.target.dataset.deleteProduct;
-  if (!id) return;
-  if (!window.confirm('Excluir este produto salvo?')) return;
-  try {
-    await api(`/api/products/${encodeURIComponent(id)}`, { method: 'DELETE' });
-    state.selectedProducts.delete(id);
-    await loadProducts();
-    toast('Produto excluído.', 'success');
-  } catch (error) { toast(error.message, 'error'); }
+  if (id) {
+    if (!window.confirm('Excluir este produto salvo?')) return;
+    try {
+      await api(`/api/products/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      state.selectedProducts.delete(id);
+      await loadProducts();
+      toast('Produto excluído.', 'success');
+    } catch (error) { toast(error.message, 'error'); }
+    return;
+  }
+
+  if (event.target.closest('input,button,a')) return;
+  const row = event.target.closest('[data-product-id]');
+  if (!row) return;
+  const productId = row.dataset.productId;
+  if (state.selectedProducts.has(productId)) state.selectedProducts.delete(productId);
+  else state.selectedProducts.add(productId);
+  renderProducts();
 });
 
 elements.groupList.addEventListener('change', (event) => {
@@ -577,7 +857,7 @@ elements.sendButton.addEventListener('click', async () => {
   elements.sendButton.disabled = true;
   elements.sendButton.textContent = 'Adicionando à fila...';
   try {
-    await api('/api/send-jobs', {
+    const result = await api('/api/send-jobs', {
       method: 'POST',
       body: JSON.stringify({
         productIds,
@@ -589,8 +869,9 @@ elements.sendButton.addEventListener('click', async () => {
     });
     state.selectedProducts.clear();
     renderProducts();
-    toast('Lote adicionado. O envio continuará mesmo com a página fechada.', 'success');
+    toast('Lote na fila. Aguardando a confirmação real do WhatsApp.');
     await loadJobs();
+    watchJob(result.job && result.job.id);
   } catch (error) {
     toast(error.message, 'error');
   } finally {
@@ -599,9 +880,12 @@ elements.sendButton.addEventListener('click', async () => {
   }
 });
 
-refreshAll().catch((error) => toast(error.message, 'error'));
-setInterval(refreshStatus, 5000);
+bootstrapAuth().catch((error) => setAuthFeedback(error.message, 'error'));
+setInterval(() => {
+  if (state.authenticated) refreshStatus();
+}, 5000);
 setInterval(async () => {
+  if (!state.authenticated) return;
   try {
     await loadJobs();
     if (state.jobs.some((job) => job.status === 'sending' || job.status === 'queued')) await loadProducts();

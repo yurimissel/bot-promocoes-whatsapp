@@ -167,6 +167,7 @@ function createJob(details) {
     failed: 0,
     currentProduct: '',
     errors: [],
+    deliveries: [],
     createdAt: new Date().toISOString(),
     startedAt: null,
     finishedAt: null,

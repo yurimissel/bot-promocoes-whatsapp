@@ -39,6 +39,14 @@
         </nav>
 
         <div class="sidebar-foot">
+          <div class="user-card" id="userCard" hidden>
+            <span class="user-avatar" id="userAvatar">U</span>
+            <div>
+              <strong id="userName">Usuário</strong>
+              <small id="userEmail">—</small>
+            </div>
+            <button id="logoutButton" title="Sair da conta" aria-label="Sair da conta">↪</button>
+          </div>
           <div class="connection-mini">
             <span class="status-dot" id="sidebarStatusDot"></span>
             <div>
@@ -46,7 +54,7 @@
               <small>WhatsApp</small>
             </div>
           </div>
-          <span class="version">PB Painel v2.0</span>
+          <span class="version">PB Painel v2.1 · Supabase</span>
         </div>
       </aside>
 
@@ -295,7 +303,7 @@
               <textarea id="templateInput" rows="12" aria-label="Modelo da mensagem"></textarea>
               <div class="settings-actions">
                 <label class="delay-setting">
-                  <span>Intervalo padrão entre produtos</span>
+                  <span>Intervalo padrão entre mensagens</span>
                   <div><input id="defaultDelayInput" type="number" min="10" max="3600"><small>segundos</small></div>
                 </label>
                 <button class="primary-button" id="saveSettingsButton">Salvar modelo</button>
@@ -316,6 +324,67 @@
           </div>
         </section>
       </main>
+    </div>
+
+    <div class="auth-overlay" id="authOverlay">
+      <div class="auth-shell">
+        <section class="auth-brand-panel">
+          <div class="auth-brand-lockup">
+            <span class="auth-logo">PB</span>
+            <div><strong>PB Promoções</strong><small>Central de ofertas</small></div>
+          </div>
+          <div class="auth-brand-copy">
+            <span class="section-kicker">ACESSO PROTEGIDO</span>
+            <h2>Suas ofertas, grupos e envios em um só lugar.</h2>
+            <p>Entre para gerenciar seus links afiliados e publicar pelo WhatsApp conectado.</p>
+          </div>
+          <div class="auth-security-note"><span>✓</span> Conta e sessão protegidas pelo Supabase</div>
+        </section>
+
+        <section class="auth-form-panel">
+          <div class="auth-mobile-brand"><span>PB</span><strong>PB Promoções</strong></div>
+          <div class="auth-heading">
+            <span class="section-kicker">BEM-VINDO</span>
+            <h1 id="authTitle">Entrar no painel</h1>
+            <p id="authSubtitle">Use seu e-mail e senha para continuar.</p>
+          </div>
+
+          <div class="auth-tabs" role="tablist" aria-label="Acesso à conta">
+            <button class="active" id="loginTab" type="button" role="tab" aria-selected="true">Entrar</button>
+            <button id="signupTab" type="button" role="tab" aria-selected="false">Criar conta</button>
+          </div>
+
+          <div class="auth-config-error" id="authConfigError" hidden></div>
+          <form id="authForm" novalidate>
+            <label id="nameField" hidden>
+              <span>Seu nome</span>
+              <input id="authName" name="name" autocomplete="name" maxlength="80" placeholder="Como podemos chamar você?">
+            </label>
+            <label>
+              <span>E-mail</span>
+              <input id="authEmail" name="email" type="email" autocomplete="email" maxlength="254" placeholder="voce@email.com" required>
+            </label>
+            <label>
+              <span>Senha</span>
+              <div class="password-field">
+                <input id="authPassword" name="password" type="password" autocomplete="current-password" minlength="8" maxlength="128" placeholder="Sua senha" required>
+                <button type="button" id="togglePassword" aria-label="Mostrar senha">◉</button>
+              </div>
+            </label>
+            <label id="confirmPasswordField" hidden>
+              <span>Confirmar senha</span>
+              <input id="authPasswordConfirm" name="password-confirm" type="password" autocomplete="new-password" minlength="8" maxlength="128" placeholder="Digite a senha novamente">
+            </label>
+            <label id="accessCodeField" hidden>
+              <span>Código de acesso</span>
+              <input id="authAccessCode" name="access-code" type="password" autocomplete="one-time-code" minlength="8" maxlength="128" placeholder="Código definido no EasyPanel">
+            </label>
+            <div class="auth-feedback" id="authFeedback" hidden></div>
+            <button class="auth-submit" id="authSubmit" type="submit">Entrar</button>
+          </form>
+          <p class="auth-footnote">Ao acessar, sua sessão permanece protegida neste navegador.</p>
+        </section>
+      </div>
     </div>
 
     <div class="connection-overlay" id="connectionOverlay" hidden>

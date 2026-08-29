@@ -5,17 +5,15 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const QRCode = require('qrcode');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
-const config = require('./src/config');
 const logger = require('./src/utils/logger');
 const store = require('./src/services/panelStore');
 const { extractLinks, inspectAffiliateUrl } = require('./src/services/mercadoLivre');
 const { enqueueJob } = require('./src/services/panelSender');
 const { discoverGroups, isGroupId, serializedId } = require('./src/services/groupDiscovery');
+const supabaseAuth = require('./src/services/supabaseAuth');
 
 const app = express();
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 const AUTH_PATH = process.env.WWEBJS_AUTH_PATH || path.resolve(__dirname, '.wwebjs_auth');
 const START_DELAY_MS = Math.max(1000, Number(process.env.WHATSAPP_START_DELAY_MS || 35000));
 
@@ -31,8 +29,6 @@ let lastGroupSyncAt = null;
 let lastGroupWarnings = [];
 let groupSyncPromise = null;
 let initializationPromise = null;
-let mainBotStarted = false;
-let queueControls = null;
 
 const client = new Client({
   authStrategy: new LocalAuth({
@@ -155,35 +151,6 @@ function initializeClient() {
   return initializationPromise;
 }
 
-function secureEquals(left, right) {
-  const leftHash = crypto.createHash('sha256').update(String(left)).digest();
-  const rightHash = crypto.createHash('sha256').update(String(right)).digest();
-  return crypto.timingSafeEqual(leftHash, rightHash);
-}
-
-function requireAdminAuth(req, res, next) {
-  if (req.path === '/api/health') return next();
-  if (!ADMIN_PASSWORD) return res.status(503).send('Configure ADMIN_PASSWORD no EasyPanel.');
-
-  const authorization = req.headers.authorization || '';
-  const match = authorization.match(/^Basic\s+(.+)$/i);
-  if (match) {
-    try {
-      const decoded = Buffer.from(match[1], 'base64').toString('utf8');
-      const separator = decoded.indexOf(':');
-      const username = separator >= 0 ? decoded.slice(0, separator) : '';
-      const password = separator >= 0 ? decoded.slice(separator + 1) : '';
-      if (username === 'admin' && secureEquals(password, ADMIN_PASSWORD)) return next();
-    } catch (_) {
-      // Solicita novamente as credenciais.
-    }
-  }
-
-  res.set('WWW-Authenticate', 'Basic realm="PB Promocoes", charset="UTF-8"');
-  res.set('Cache-Control', 'no-store');
-  return res.status(401).send('Autenticação necessária.');
-}
-
 function requireSameOrigin(req, res, next) {
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
   const origin = req.get('origin');
@@ -198,18 +165,117 @@ function requireSameOrigin(req, res, next) {
   return next();
 }
 
+const authAttempts = new Map();
+
+function authRateLimit(req, res, next) {
+  const key = String(req.ip || req.socket.remoteAddress || 'unknown');
+  const now = Date.now();
+  const windowMs = 15 * 60 * 1000;
+  const record = authAttempts.get(key);
+  if (!record || now - record.startedAt > windowMs) {
+    authAttempts.set(key, { count: 1, startedAt: now });
+    return next();
+  }
+  record.count += 1;
+  if (record.count > 12) {
+    res.set('Retry-After', String(Math.ceil((windowMs - (now - record.startedAt)) / 1000)));
+    return res.status(429).json({ error: 'Muitas tentativas. Aguarde alguns minutos.' });
+  }
+  return next();
+}
+
+const rateLimitCleanup = setInterval(() => {
+  const cutoff = Date.now() - 15 * 60 * 1000;
+  for (const [key, record] of authAttempts.entries()) {
+    if (record.startedAt < cutoff) authAttempts.delete(key);
+  }
+}, 15 * 60 * 1000);
+rateLimitCleanup.unref();
+
 app.disable('x-powered-by');
+app.set('trust proxy', 1);
 app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('Referrer-Policy', 'same-origin');
   res.set('X-Frame-Options', 'DENY');
+  res.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.set(
+    'Content-Security-Policy',
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+  );
   next();
 });
-app.use(requireAdminAuth);
-app.use(requireSameOrigin);
 app.use(express.json({ limit: '1mb' }));
+app.use(requireSameOrigin);
 
 app.get('/api/health', (req, res) => res.json({ ok: true }));
+
+app.get('/api/auth/settings', (req, res) => {
+  res.set('Cache-Control', 'private, no-store');
+  return res.json({
+    configured: supabaseAuth.isConfigured(),
+    allowSignups: supabaseAuth.signupsEnabled(),
+  });
+});
+
+app.post('/api/auth/signup', authRateLimit, async (req, res) => {
+  if (!supabaseAuth.isConfigured()) {
+    return res.status(503).json({ error: 'Configure o Supabase no EasyPanel antes de criar contas.' });
+  }
+  const name = String((req.body && req.body.name) || '').trim();
+  const email = String((req.body && req.body.email) || '').trim().toLowerCase();
+  const password = String((req.body && req.body.password) || '');
+  const accessCode = String((req.body && req.body.accessCode) || '');
+  if (name.length < 2 || name.length > 80) {
+    return res.status(400).json({ error: 'Informe seu nome com 2 a 80 caracteres.' });
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+    return res.status(400).json({ error: 'Informe um e-mail válido.' });
+  }
+  if (password.length < 8 || password.length > 128) {
+    return res.status(400).json({ error: 'A senha precisa ter entre 8 e 128 caracteres.' });
+  }
+
+  try {
+    const result = await supabaseAuth.signUp({ name, email, password, accessCode });
+    if (result.session) supabaseAuth.setSessionCookies(req, res, result.session);
+    return res.status(201).json({
+      user: result.user,
+      authenticated: Boolean(result.session),
+      requiresEmailConfirmation: result.requiresEmailConfirmation,
+    });
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/auth/login', authRateLimit, async (req, res) => {
+  if (!supabaseAuth.isConfigured()) {
+    return res.status(503).json({ error: 'Configure o Supabase no EasyPanel antes de entrar.' });
+  }
+  const email = String((req.body && req.body.email) || '').trim().toLowerCase();
+  const password = String((req.body && req.body.password) || '');
+  if (!email || !password) return res.status(400).json({ error: 'Informe e-mail e senha.' });
+
+  try {
+    const result = await supabaseAuth.signIn({ email, password });
+    supabaseAuth.setSessionCookies(req, res, result.session);
+    return res.json({ authenticated: true, user: result.user });
+  } catch (error) {
+    return res.status(401).json({ error: error.message });
+  }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  await supabaseAuth.signOut(req, res);
+  return res.json({ ok: true });
+});
+
+app.get('/api/auth/me', supabaseAuth.authenticateRequest, (req, res) => {
+  return res.json({ authenticated: true, user: req.publicUser });
+});
+
+app.use('/api', supabaseAuth.authenticateRequest);
 
 app.get('/api/status', async (req, res) => {
   if (isAuthenticated || isReady) await refreshConnectionState();
@@ -408,6 +474,9 @@ app.post('/api/send-jobs', async (req, res) => {
   if (groupIds.length === 0 || groupIds.length > 20) {
     return res.status(400).json({ error: 'Selecione de 1 a 20 grupos.' });
   }
+  if (groupIds.some((id) => !isGroupId(id))) {
+    return res.status(400).json({ error: 'A seleção contém um destino que não é grupo do WhatsApp.' });
+  }
   if (!template.includes('{link}')) {
     return res.status(400).json({ error: 'O modelo precisa conter {link}.' });
   }
@@ -418,6 +487,18 @@ app.post('/api/send-jobs', async (req, res) => {
   const availableProducts = store.getProducts(productIds);
   if (availableProducts.length !== productIds.length) {
     return res.status(400).json({ error: 'Um dos produtos selecionados não existe mais.' });
+  }
+
+  try {
+    const availableGroups = new Set((await syncGroups(false)).map((group) => group.id));
+    const unavailable = groupIds.filter((id) => !availableGroups.has(id));
+    if (unavailable.length > 0) {
+      return res.status(409).json({
+        error: 'Um grupo selecionado não está mais disponível. Sincronize os grupos e tente novamente.',
+      });
+    }
+  } catch (error) {
+    return res.status(409).json({ error: `Não foi possível validar os grupos: ${error.message}` });
   }
 
   const job = enqueueJob(client, {
@@ -468,7 +549,6 @@ client.on('ready', async () => {
     } catch (error) {
       whatsappError = `Conectado, mas os grupos ainda não sincronizaram: ${error.message}`;
     }
-    startLegacyAutomation();
   } else {
     connectionStatus = 'Sessão carregada, aguardando conexão real com o WhatsApp...';
   }
@@ -506,26 +586,7 @@ client.on('disconnected', (reason) => {
   logger.warn('WhatsApp desconectado:', reason);
 });
 
-function startLegacyAutomation() {
-  if (mainBotStarted || config.sourceGroups.length === 0 || !config.destGroup) return;
-  try {
-    const { registerListener } = require('./src/services/listener');
-    const { startProcessing, stopProcessing, saveBeforeExit } = require('./src/services/queue');
-    registerListener(client);
-    startProcessing(client);
-    mainBotStarted = true;
-    queueControls = { stopProcessing, saveBeforeExit };
-    logger.info('Automação de grupos fonte iniciada.');
-  } catch (error) {
-    logger.error('Não foi possível iniciar a automação de grupos:', error.message);
-  }
-}
-
 async function shutdown() {
-  if (queueControls) {
-    queueControls.stopProcessing();
-    queueControls.saveBeforeExit();
-  }
   try {
     await client.destroy();
   } catch (_) {

@@ -1,4 +1,11 @@
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const testDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pb-panel-test-'));
+process.env.DATA_DIR = testDataDir;
+process.on('exit', () => fs.rmSync(testDataDir, { recursive: true, force: true }));
 const {
   extractLinks, extractItemId, extractCatalogId, isMercadoLivreUrl, jsonLdProduct,
 } = require('./src/services/mercadoLivre');

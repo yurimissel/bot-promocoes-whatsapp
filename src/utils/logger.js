@@ -3,8 +3,6 @@
 // Formato: [HH:MM:SS] [LEVEL] mensagem
 // ============================================
 
-const config = require('../config');
-
 // Mapa de prioridade dos níveis de log
 const LOG_LEVELS = {
   DEBUG: 0,
@@ -14,7 +12,8 @@ const LOG_LEVELS = {
 };
 
 // Nível mínimo configurado (tudo abaixo é ignorado)
-const currentLevel = LOG_LEVELS[config.logLevel] ?? LOG_LEVELS.INFO;
+const requestedLevel = String(process.env.LOG_LEVEL || 'INFO').trim().toUpperCase();
+const currentLevel = LOG_LEVELS[requestedLevel] ?? LOG_LEVELS.INFO;
 
 /**
  * Formata o timestamp atual como HH:MM:SS

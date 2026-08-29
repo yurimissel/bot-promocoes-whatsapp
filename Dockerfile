@@ -18,7 +18,9 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY package.json package-lock.json ./
+# Chromium vem do Debian; o extrator de ZIP do downloader não é usado em produção.
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+    && rm -rf node_modules/extract-zip \
     && npm cache clean --force
 
 COPY . .
