@@ -1,5 +1,6 @@
 const { MessageMedia } = require('whatsapp-web.js');
 const store = require('./panelStore');
+const { discoverGroups, isGroupId } = require('./groupDiscovery');
 const logger = require('../utils/logger');
 
 let chain = Promise.resolve();
@@ -51,11 +52,10 @@ async function downloadImage(imageUrl) {
 }
 
 async function verifyGroups(client, groupIds) {
-  const chats = await client.getChats();
-  const available = new Set(
-    chats.filter((chat) => chat.isGroup).map((chat) => chat.id._serialized)
-  );
-  return groupIds.filter((id) => available.has(id) && id.endsWith('@g.us'));
+  const customGroups = store.getSettings().customGroups || [];
+  const discovery = await discoverGroups(client, customGroups);
+  const available = new Set(discovery.groups.map((group) => group.id));
+  return groupIds.filter((id) => isGroupId(id) && available.has(id));
 }
 
 async function runJob(client, job, options) {

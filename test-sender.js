@@ -17,7 +17,10 @@ async function main() {
     clearState: async () => {},
   };
   const fakeClient = {
+    getState: async () => 'CONNECTED',
+    sendPresenceAvailable: async () => {},
     getChats: async () => [{ isGroup: true, id: { _serialized: 'grupo@g.us' } }],
+    getContacts: async () => [],
     getChatById: async () => fakeChat,
     sendMessage: async (groupId, content) => messages.push({ groupId, content }),
   };

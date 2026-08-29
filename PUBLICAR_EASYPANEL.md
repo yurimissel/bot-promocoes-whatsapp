@@ -1,4 +1,4 @@
-# PB Promoções v1.1 — publicar/atualizar no EasyPanel
+# PB Promoções v2.0 — publicar/atualizar no EasyPanel
 
 Esta versão oferece um painel web para salvar links afiliados prontos do
 Mercado Livre, selecionar os grupos do WhatsApp conectado e enviar as ofertas
@@ -14,7 +14,9 @@ em um volume persistente.
 4. Faça commit das alterações no GitHub.
 5. No EasyPanel, clique em **Implantar**.
 
-Sua sessão do WhatsApp será reaproveitada automaticamente.
+Sua sessão do WhatsApp será reaproveitada automaticamente. Depois de implantar,
+aguarde até 60 segundos: o atraso evita que dois containers usem o mesmo perfil
+do Chromium durante a troca de versão.
 
 ## 1. Nova instalação: envie o projeto para um repositório
 
@@ -80,6 +82,10 @@ Senha: valor configurado em ADMIN_PASSWORD
 
 Depois, escaneie o QR Code em WhatsApp → Aparelhos conectados. O painel então
 listará automaticamente todos os grupos disponíveis.
+
+Se um grupo não aparecer, abra **WhatsApp e grupos**, clique em
+**Sincronizar grupos** e, como alternativa, cole o link de convite do grupo.
+O convite serve apenas para localizar o grupo e não é publicado.
 
 ## Como usar o painel
 

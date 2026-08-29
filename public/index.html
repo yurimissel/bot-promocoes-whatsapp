@@ -28,6 +28,10 @@
             <span class="nav-icon">➤</span>
             <span>Enviar ofertas</span>
           </button>
+          <button class="nav-item" data-view="whatsapp">
+            <span class="nav-icon">◉</span>
+            <span>WhatsApp e grupos</span>
+          </button>
           <button class="nav-item" data-view="settings">
             <span class="nav-icon">⚙</span>
             <span>Modelo da mensagem</span>
@@ -42,7 +46,7 @@
               <small>WhatsApp</small>
             </div>
           </div>
-          <span class="version">PB Painel v1.1</span>
+          <span class="version">PB Painel v2.0</span>
         </div>
       </aside>
 
@@ -184,7 +188,10 @@
                   <h3>Grupos <span class="count-badge" id="groupCount">0</span></h3>
                   <p id="groupSummary">0 selecionados</p>
                 </div>
-                <button class="text-button" id="selectAllGroups">Todos</button>
+                <div class="inline-actions">
+                  <button class="text-button" id="syncGroupsButton" title="Buscar grupos no WhatsApp">↻ Sincronizar</button>
+                  <button class="text-button" id="selectAllGroups">Todos</button>
+                </div>
               </div>
               <label class="search-field compact-search">
                 <span>⌕</span>
@@ -207,6 +214,60 @@
               <div><input id="delayInput" type="number" min="10" max="3600" value="120"><small>seg</small></div>
             </label>
             <button class="send-button" id="sendButton" disabled>Enviar ofertas</button>
+          </section>
+        </section>
+
+        <section class="view" id="whatsappView" hidden>
+          <div class="section-heading">
+            <div>
+              <span class="section-kicker">CONEXÃO REAL</span>
+              <h2>WhatsApp e grupos</h2>
+              <p>Confira a sessão usada nos envios e sincronize os grupos dessa conta.</p>
+            </div>
+            <div class="inline-actions">
+              <button class="secondary-button" id="newQrButton" data-new-qr>Trocar conta / novo QR</button>
+              <button class="secondary-button" id="reconnectButton" data-reconnect>Reconectar</button>
+              <button class="primary-button" id="syncGroupsPageButton">Sincronizar grupos</button>
+            </div>
+          </div>
+
+          <div class="whatsapp-grid">
+            <section class="panel connection-details">
+              <div class="panel-title-row">
+                <div><h3>Status da sessão</h3><p>O painel valida o estado diretamente no WhatsApp Web.</p></div>
+                <span class="status-tag" id="waRealStatus">VERIFICANDO</span>
+              </div>
+              <dl class="details-list">
+                <div><dt>Conta</dt><dd id="waAccount">—</dd></div>
+                <div><dt>Estado real</dt><dd id="waState">—</dd></div>
+                <div><dt>Versão do WhatsApp Web</dt><dd id="waVersion">—</dd></div>
+                <div><dt>Grupos encontrados</dt><dd id="waGroupsCount">0</dd></div>
+                <div><dt>Última sincronização</dt><dd id="waLastSync">Ainda não realizada</dd></div>
+              </dl>
+              <div class="connection-error" id="waError" hidden></div>
+            </section>
+
+            <aside class="panel manual-group-panel">
+              <span class="section-kicker">PLANO B</span>
+              <h3>Adicionar grupo pelo convite</h3>
+              <p>Se algum grupo não aparecer automaticamente, cole o link de convite dele. O bot não divulga nem publica esse link.</p>
+              <label>
+                <span>Link de convite ou ID do grupo</span>
+                <input id="manualGroupId" placeholder="https://chat.whatsapp.com/...">
+              </label>
+              <label>
+                <span>Nome (opcional)</span>
+                <input id="manualGroupName" placeholder="PB Promoções">
+              </label>
+              <button class="primary-button" id="addManualGroupButton">Adicionar grupo</button>
+            </aside>
+          </div>
+
+          <section class="panel synced-groups-panel">
+            <div class="panel-title-row">
+              <div><h3>Grupos disponíveis para envio</h3><p>Somente os grupos selecionados na tela “Enviar ofertas” receberão mensagens.</p></div>
+            </div>
+            <div id="syncedGroupsList" class="synced-groups-list"></div>
           </section>
         </section>
 
@@ -264,6 +325,10 @@
         <h2>Conecte seu WhatsApp</h2>
         <p id="qrStatus">Preparando QR Code...</p>
         <div class="qr-frame" id="qrFrame"><span class="spinner"></span></div>
+        <div class="overlay-actions">
+          <button class="secondary-button" data-reconnect>Tentar reconectar</button>
+          <button class="text-button" data-new-qr>Gerar novo QR</button>
+        </div>
         <ol>
           <li>Abra o WhatsApp no celular.</li>
           <li>Entre em <strong>Aparelhos conectados</strong>.</li>

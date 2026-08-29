@@ -7,6 +7,8 @@ const state = {
   selectedGroups: new Set(),
   shuffle: false,
   ready: false,
+  status: null,
+  groupsLoading: false,
   activeView: 'offers',
 };
 
@@ -27,6 +29,16 @@ const elements = {
   groupList: document.getElementById('groupList'),
   selectionSummary: document.getElementById('selectionSummary'),
   groupSummary: document.getElementById('groupSummary'),
+  syncedGroupsList: document.getElementById('syncedGroupsList'),
+  waRealStatus: document.getElementById('waRealStatus'),
+  waAccount: document.getElementById('waAccount'),
+  waState: document.getElementById('waState'),
+  waVersion: document.getElementById('waVersion'),
+  waGroupsCount: document.getElementById('waGroupsCount'),
+  waLastSync: document.getElementById('waLastSync'),
+  waError: document.getElementById('waError'),
+  manualGroupId: document.getElementById('manualGroupId'),
+  manualGroupName: document.getElementById('manualGroupName'),
   sendTotal: document.getElementById('sendTotal'),
   sendDetail: document.getElementById('sendDetail'),
   sendButton: document.getElementById('sendButton'),
@@ -83,7 +95,12 @@ function toast(message, type = '') {
 }
 
 function setView(view) {
-  const titles = { overview: 'Visão geral', offers: 'Enviar ofertas', settings: 'Modelo da mensagem' };
+  const titles = {
+    overview: 'Visão geral',
+    offers: 'Enviar ofertas',
+    whatsapp: 'WhatsApp e grupos',
+    settings: 'Modelo da mensagem',
+  };
   state.activeView = view;
   document.querySelectorAll('.view').forEach((element) => {
     const active = element.id === `${view}View`;
@@ -96,6 +113,7 @@ function setView(view) {
   elements.pageTitle.textContent = titles[view];
   elements.sidebar.classList.remove('open');
   if (view === 'overview') renderOverview();
+  if (view === 'whatsapp') renderConnectionDetails();
   if (view === 'settings') renderPreview();
 }
 
@@ -164,7 +182,9 @@ function renderGroups() {
   const groups = filteredGroups();
   elements.groupCount.textContent = state.groups.length;
   if (groups.length === 0) {
-    elements.groupList.innerHTML = `<div class="group-empty">${state.ready ? 'Nenhum grupo encontrado neste WhatsApp.' : 'Conecte o WhatsApp para carregar os grupos.'}</div>`;
+    elements.groupList.innerHTML = `<div class="group-empty">${state.ready
+      ? 'Nenhum grupo sincronizado. Use ↻ Sincronizar ou adicione pelo convite em “WhatsApp e grupos”.'
+      : 'Conecte o WhatsApp para carregar os grupos.'}</div>`;
   } else {
     elements.groupList.innerHTML = groups.map((group) => {
       const selected = state.selectedGroups.has(group.id);
@@ -176,7 +196,41 @@ function renderGroups() {
         </label>`;
     }).join('');
   }
+  renderConnectionDetails();
   renderSelectionSummary();
+}
+
+function renderConnectionDetails() {
+  const status = state.status || {};
+  const account = status.account || {};
+  if (elements.waRealStatus) {
+    elements.waRealStatus.textContent = state.ready ? 'CONECTADO' : 'DESCONECTADO';
+    elements.waRealStatus.className = `status-tag ${state.ready ? 'completed' : 'failed'}`;
+    elements.waAccount.textContent = account.name
+      ? `${account.name}${account.id ? ` · ${account.id}` : ''}`
+      : (account.id || '—');
+    elements.waState.textContent = status.state || (state.ready ? 'CONNECTED' : '—');
+    elements.waVersion.textContent = status.webVersion || '—';
+    elements.waGroupsCount.textContent = String(state.groups.length);
+    elements.waLastSync.textContent = status.lastGroupSyncAt
+      ? formatDate(status.lastGroupSyncAt)
+      : 'Ainda não realizada';
+    elements.waError.hidden = !status.error;
+    elements.waError.textContent = status.error || '';
+  }
+
+  if (!elements.syncedGroupsList) return;
+  if (state.groups.length === 0) {
+    elements.syncedGroupsList.innerHTML = '<div class="group-empty">Nenhum grupo disponível ainda.</div>';
+    return;
+  }
+  elements.syncedGroupsList.innerHTML = state.groups.map((group) => `
+    <div class="synced-group-row">
+      <span class="synced-group-icon">◉</span>
+      <div><strong>${escapeHtml(group.name)}</strong><small>${escapeHtml(group.id)}${group.participants ? ` · ${group.participants} participantes` : ''}</small></div>
+      <span class="status-tag completed">${group.source === 'manual' ? 'MANUAL' : 'WHATSAPP'}</span>
+      ${group.source === 'manual' ? `<button class="delete-button" data-remove-group="${escapeHtml(group.id)}" title="Remover grupo manual">×</button>` : ''}
+    </div>`).join('');
 }
 
 function renderSelectionSummary() {
@@ -238,6 +292,7 @@ async function refreshStatus() {
   try {
     const status = await api('/api/status');
     const wasReady = state.ready;
+    state.status = status;
     state.ready = Boolean(status.ready);
     elements.connectionText.textContent = status.status;
     elements.sidebarStatus.textContent = status.ready ? 'Conectado' : 'Aguardando';
@@ -250,7 +305,9 @@ async function refreshStatus() {
     } else if (!status.ready) {
       elements.qrFrame.innerHTML = '<span class="spinner"></span>';
     }
-    if (!wasReady && status.ready) await loadGroups();
+    if (!wasReady && status.ready) await loadGroups(true, true);
+    else if (status.ready && Number(status.groupsCount) !== state.groups.length) await loadGroups(false, true);
+    renderConnectionDetails();
     renderSelectionSummary();
   } catch (error) {
     elements.connectionText.textContent = 'Painel indisponível';
@@ -265,15 +322,20 @@ async function loadProducts() {
   renderProducts();
 }
 
-async function loadGroups() {
+async function loadGroups(force = false, quiet = false) {
   if (!state.ready) return renderGroups();
+  if (state.groupsLoading) return;
+  state.groupsLoading = true;
   try {
-    const data = await api('/api/groups');
+    const data = await api(force ? '/api/groups/sync' : '/api/groups', force ? { method: 'POST' } : {});
     state.groups = data.groups;
+    if (state.status) state.status.lastGroupSyncAt = data.syncedAt || state.status.lastGroupSyncAt;
     const valid = new Set(state.groups.map((group) => group.id));
     state.selectedGroups.forEach((id) => { if (!valid.has(id)) state.selectedGroups.delete(id); });
   } catch (error) {
-    toast(error.message, 'error');
+    if (!quiet) toast(error.message, 'error');
+  } finally {
+    state.groupsLoading = false;
   }
   renderGroups();
 }
@@ -305,6 +367,110 @@ document.querySelectorAll('[data-go-offers]').forEach((button) => button.addEven
 document.getElementById('menuButton').addEventListener('click', () => elements.sidebar.classList.toggle('open'));
 document.getElementById('refreshButton').addEventListener('click', async () => {
   try { await refreshAll(); toast('Painel atualizado.', 'success'); } catch (error) { toast(error.message, 'error'); }
+});
+
+async function syncGroupsAction(button) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Sincronizando...';
+  try {
+    await refreshStatus();
+    if (!state.ready) throw new Error('O WhatsApp ainda não está conectado de verdade.');
+    await loadGroups(true);
+    toast(`${state.groups.length} grupo(s) sincronizado(s).`, 'success');
+  } catch (error) {
+    toast(error.message, 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+document.getElementById('syncGroupsButton').addEventListener('click', (event) => syncGroupsAction(event.currentTarget));
+document.getElementById('syncGroupsPageButton').addEventListener('click', (event) => syncGroupsAction(event.currentTarget));
+
+async function reconnectAction(button) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Reconectando...';
+  try {
+    await api('/api/whatsapp/reconnect', { method: 'POST' });
+    await refreshStatus();
+    if (state.ready) await loadGroups(true);
+    toast(state.ready ? 'WhatsApp reconectado.' : 'Reconexão iniciada; aguarde alguns segundos.', 'success');
+  } catch (error) {
+    toast(error.message, 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+document.querySelectorAll('[data-reconnect]').forEach((button) => {
+  button.addEventListener('click', () => reconnectAction(button));
+});
+
+async function newQrAction(button) {
+  if (!window.confirm('Gerar um novo QR desconectará a sessão atual. Continuar?')) return;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Preparando...';
+  try {
+    await api('/api/whatsapp/new-qr', { method: 'POST' });
+    state.ready = false;
+    state.groups = [];
+    renderGroups();
+    await refreshStatus();
+    toast('Nova sessão iniciada. Aguarde o QR Code.', 'success');
+  } catch (error) {
+    toast(error.message, 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
+document.querySelectorAll('[data-new-qr]').forEach((button) => {
+  button.addEventListener('click', () => newQrAction(button));
+});
+
+document.getElementById('addManualGroupButton').addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  const id = elements.manualGroupId.value.trim();
+  const name = elements.manualGroupName.value.trim();
+  if (!id) return toast('Cole o link de convite ou o ID do grupo.', 'error');
+  button.disabled = true;
+  button.textContent = 'Consultando grupo...';
+  try {
+    const data = await api('/api/groups/manual', {
+      method: 'POST',
+      body: JSON.stringify({ id, name }),
+    });
+    state.groups = data.groups;
+    elements.manualGroupId.value = '';
+    elements.manualGroupName.value = '';
+    renderGroups();
+    toast('Grupo adicionado e pronto para seleção.', 'success');
+  } catch (error) {
+    toast(error.message, 'error');
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Adicionar grupo';
+  }
+});
+
+elements.syncedGroupsList.addEventListener('click', async (event) => {
+  const id = event.target.dataset.removeGroup;
+  if (!id) return;
+  try {
+    const data = await api(`/api/groups/manual/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    state.groups = data.groups;
+    state.selectedGroups.delete(id);
+    renderGroups();
+    toast('Grupo manual removido.', 'success');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
 });
 
 elements.importButton.addEventListener('click', async () => {

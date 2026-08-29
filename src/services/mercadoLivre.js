@@ -46,9 +46,70 @@ function metaValue(html, property) {
   return '';
 }
 
+function itemPropValue(html, property) {
+  const escaped = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const patterns = [
+    new RegExp(`<meta[^>]+itemprop=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`, 'i'),
+    new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+itemprop=["']${escaped}["'][^>]*>`, 'i'),
+  ];
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match) return decodeEntities(match[1].trim());
+  }
+  return '';
+}
+
+function jsonLdProduct(html) {
+  const scripts = String(html || '').matchAll(
+    /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
+  );
+
+  const findProduct = (value) => {
+    if (!value || typeof value !== 'object') return null;
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        const found = findProduct(entry);
+        if (found) return found;
+      }
+      return null;
+    }
+    const type = Array.isArray(value['@type']) ? value['@type'] : [value['@type']];
+    if (type.some((entry) => String(entry || '').toLowerCase() === 'product')) return value;
+    for (const nested of Object.values(value)) {
+      const found = findProduct(nested);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  for (const match of scripts) {
+    try {
+      const product = findProduct(JSON.parse(decodeEntities(match[1].trim())));
+      if (!product) continue;
+      const offers = Array.isArray(product.offers) ? product.offers[0] : (product.offers || {});
+      const imageValue = Array.isArray(product.image) ? product.image[0] : product.image;
+      const image = typeof imageValue === 'object' ? imageValue.url : imageValue;
+      return {
+        title: product.name || '',
+        image: image || '',
+        price: offers.price || offers.lowPrice || '',
+        originalPrice: offers.highPrice || '',
+      };
+    } catch (_) {
+      // Alguns anúncios publicam blocos JSON-LD incompletos; tenta o próximo.
+    }
+  }
+  return {};
+}
+
 function extractItemId(value) {
   const match = String(value || '').match(/\bMLB[-_]?([0-9]{6,})\b/i);
   return match ? `MLB${match[1]}` : '';
+}
+
+function extractCatalogId(value) {
+  const match = String(value || '').match(/\/p\/(MLB[0-9]{6,})\b/i);
+  return match ? match[1].toUpperCase() : '';
 }
 
 function formatMoney(value) {
@@ -91,6 +152,20 @@ async function loadItemApi(itemId) {
   }
 }
 
+async function loadCatalogApi(catalogId) {
+  if (!catalogId) return null;
+  try {
+    const response = await fetchWithTimeout(`https://api.mercadolibre.com/products/${catalogId}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) return null;
+    return response.json();
+  } catch (error) {
+    logger.warn(`[Mercado Livre] Catálogo indisponível para ${catalogId}: ${error.message}`);
+    return null;
+  }
+}
+
 async function inspectAffiliateUrl(affiliateUrl) {
   if (!isMercadoLivreUrl(affiliateUrl)) {
     throw new Error('Use somente links HTTPS do Mercado Livre ou meli.la.');
@@ -109,20 +184,36 @@ async function inspectAffiliateUrl(affiliateUrl) {
   }
 
   const html = await response.text();
-  const itemId = extractItemId(finalUrl) || extractItemId(html);
+  const catalogId = extractCatalogId(finalUrl);
+  const catalog = await loadCatalogApi(catalogId);
+  const catalogWinner = catalog && catalog.buy_box_winner;
+  const itemId = (catalogWinner && catalogWinner.item_id)
+    || (!catalogId && extractItemId(finalUrl))
+    || extractItemId(html);
   const apiItem = await loadItemApi(itemId);
+  const structured = jsonLdProduct(html);
 
-  const apiPrice = apiItem && apiItem.price;
-  const apiOriginal = apiItem && apiItem.original_price;
-  const pagePrice = metaValue(html, 'product:price:amount');
-  const pageOriginal = metaValue(html, 'product:original_price:amount');
+  const apiPrice = (apiItem && apiItem.price) || (catalogWinner && catalogWinner.price);
+  const apiOriginal = (apiItem && apiItem.original_price)
+    || (catalogWinner && catalogWinner.original_price);
+  const pagePrice = structured.price
+    || metaValue(html, 'product:price:amount')
+    || metaValue(html, 'og:price:amount')
+    || itemPropValue(html, 'price');
+  const pageOriginal = structured.originalPrice
+    || metaValue(html, 'product:original_price:amount')
+    || itemPropValue(html, 'highPrice');
 
   const title = (apiItem && apiItem.title)
+    || (catalog && catalog.name)
+    || structured.title
     || metaValue(html, 'og:title')
     || metaValue(html, 'twitter:title')
     || 'Produto Mercado Livre';
   const image = (apiItem && apiItem.pictures && apiItem.pictures[0] && apiItem.pictures[0].secure_url)
     || (apiItem && (apiItem.secure_thumbnail || apiItem.thumbnail))
+    || (catalog && catalog.pictures && catalog.pictures[0] && (catalog.pictures[0].secure_url || catalog.pictures[0].url))
+    || structured.image
     || metaValue(html, 'og:image')
     || '';
   const rawPrice = apiPrice || pagePrice;
@@ -143,5 +234,7 @@ module.exports = {
   isMercadoLivreUrl,
   extractLinks,
   extractItemId,
+  extractCatalogId,
+  jsonLdProduct,
   inspectAffiliateUrl,
 };

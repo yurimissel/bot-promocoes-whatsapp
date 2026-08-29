@@ -1,6 +1,6 @@
 {
   "name": "promo-bot",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "Painel PB Promoções para salvar e enviar ofertas pelo WhatsApp",
   "main": "index.js",
   "scripts": {
@@ -15,6 +15,7 @@
     "test:regex": "node test-regex.js",
     "test:panel": "node test-panel.js",
     "test:sender": "node test-sender.js",
+    "test:groups": "node test-groups.js",
     "dev": "node --watch index.js"
   },
   "keywords": [],
@@ -24,6 +25,6 @@
     "express": "^4.22.1",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
-    "whatsapp-web.js": "^1.34.6"
+    "whatsapp-web.js": "1.34.7"
   }
 }

@@ -1,9 +1,13 @@
-# PB Promoções v1.1 — Painel de Envios pelo WhatsApp
+# PB Promoções v2.0 — Painel de Envios pelo WhatsApp
 
 > Esta versão para EasyPanel adiciona um painel web completo: cadastro de links
 > `meli.la` já afiliados, leitura de título/preço/foto, seleção dos grupos do
 > WhatsApp conectado por QR Code, modelo de mensagem, fila e histórico. Para
 > usar somente o painel, mantenha `SOURCE_GROUPS` e `DEST_GROUP` vazios.
+
+Esta versão valida a conexão real com o WhatsApp, sincroniza grupos por chats,
+contatos e cache da sessão, permite sincronização manual e aceita link de
+convite como alternativa quando um grupo não aparecer automaticamente.
 
 ## Uso do painel
 

@@ -13,6 +13,7 @@ const defaultState = () => ({
   settings: {
     template: '🔥 *{titulo}*\n\n💰 *Por {preco}*\n\n🛒 Compre aqui: {link}',
     defaultDelaySeconds: 120,
+    customGroups: [],
   },
   jobs: [],
 });
@@ -131,6 +132,30 @@ function updateSettings(next) {
   return getSettings();
 }
 
+function addCustomGroup(group) {
+  const groups = Array.isArray(state.settings.customGroups)
+    ? state.settings.customGroups
+    : [];
+  const existing = groups.find((item) => item.id === group.id);
+  if (existing) {
+    existing.name = group.name || existing.name;
+  } else {
+    groups.push({ id: group.id, name: group.name || group.id });
+  }
+  state.settings.customGroups = groups;
+  persist();
+  return [...groups];
+}
+
+function removeCustomGroup(id) {
+  const groups = Array.isArray(state.settings.customGroups)
+    ? state.settings.customGroups
+    : [];
+  state.settings.customGroups = groups.filter((group) => group.id !== id);
+  persist();
+  return [...state.settings.customGroups];
+}
+
 function createJob(details) {
   const job = {
     id: crypto.randomUUID(),
@@ -174,6 +199,8 @@ module.exports = {
   markProductSent,
   getSettings,
   updateSettings,
+  addCustomGroup,
+  removeCustomGroup,
   createJob,
   updateJob,
   listJobs,
