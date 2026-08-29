@@ -1,4 +1,24 @@
-# 🚀 Bot de Promoções WhatsApp com Links Afiliados
+# PB Promoções v1.1 — Painel de Envios pelo WhatsApp
+
+> Esta versão para EasyPanel adiciona um painel web completo: cadastro de links
+> `meli.la` já afiliados, leitura de título/preço/foto, seleção dos grupos do
+> WhatsApp conectado por QR Code, modelo de mensagem, fila e histórico. Para
+> usar somente o painel, mantenha `SOURCE_GROUPS` e `DEST_GROUP` vazios.
+
+## Uso do painel
+
+1. Abra o domínio configurado no EasyPanel e entre com usuário `admin`.
+2. Conecte o WhatsApp pelo QR Code.
+3. Cole os links afiliados prontos do Mercado Livre.
+4. Selecione produtos e grupos e clique em **Enviar ofertas**.
+
+O painel preserva exatamente o link cadastrado. A automação de conversão de
+links descrita abaixo pertence ao projeto original e continua sendo apenas um
+placeholder.
+
+---
+
+# 🚀 Bot de Promoções WhatsApp com Links Afiliados (projeto original)
 
 Um bot inteligente que escuta promoções em grupos-fonte do WhatsApp, converte links para afiliados e os reposta em um grupo-destino com **comportamento completamente humanizado** para evitar banimento.
 

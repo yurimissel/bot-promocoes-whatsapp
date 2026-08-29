@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#07111f">
+    <meta name="description" content="Painel de envios PB Promoções">
+    <title>PB Promoções — Painel de Envios</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar">
+        <div class="brand">
+          <div class="brand-mark">PB</div>
+          <div>
+            <strong>PB Promoções</strong>
+            <span>Central de ofertas</span>
+          </div>
+        </div>
+
+        <nav class="nav" aria-label="Navegação principal">
+          <button class="nav-item" data-view="overview">
+            <span class="nav-icon">⌂</span>
+            <span>Visão geral</span>
+          </button>
+          <button class="nav-item active" data-view="offers">
+            <span class="nav-icon">➤</span>
+            <span>Enviar ofertas</span>
+          </button>
+          <button class="nav-item" data-view="settings">
+            <span class="nav-icon">⚙</span>
+            <span>Modelo da mensagem</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-foot">
+          <div class="connection-mini">
+            <span class="status-dot" id="sidebarStatusDot"></span>
+            <div>
+              <strong id="sidebarStatus">Conectando</strong>
+              <small>WhatsApp</small>
+            </div>
+          </div>
+          <span class="version">PB Painel v1.1</span>
+        </div>
+      </aside>
+
+      <main class="main">
+        <header class="topbar">
+          <button class="menu-button" id="menuButton" aria-label="Abrir menu">☰</button>
+          <div>
+            <p class="eyebrow">PAINEL OPERACIONAL</p>
+            <h1 id="pageTitle">Enviar ofertas</h1>
+          </div>
+          <div class="topbar-actions">
+            <span class="connection-pill" id="connectionPill">
+              <span class="status-dot"></span>
+              <span id="connectionText">Conectando...</span>
+            </span>
+            <button class="icon-button" id="refreshButton" aria-label="Atualizar dados">↻</button>
+          </div>
+        </header>
+
+        <section class="view" id="overviewView" hidden>
+          <div class="section-heading">
+            <div>
+              <span class="section-kicker">RESUMO</span>
+              <h2>Operação de hoje</h2>
+            </div>
+            <button class="primary-button" data-go-offers>Nova oferta</button>
+          </div>
+
+          <div class="stats-grid">
+            <article class="stat-card accent-blue">
+              <span>Produtos salvos</span>
+              <strong id="statProducts">0</strong>
+              <small>Prontos para selecionar</small>
+            </article>
+            <article class="stat-card accent-green">
+              <span>Grupos disponíveis</span>
+              <strong id="statGroups">0</strong>
+              <small>No WhatsApp conectado</small>
+            </article>
+            <article class="stat-card accent-orange">
+              <span>Envios concluídos</span>
+              <strong id="statSent">0</strong>
+              <small>Registrados no painel</small>
+            </article>
+            <article class="stat-card accent-purple">
+              <span>Fila atual</span>
+              <strong id="statQueue">Livre</strong>
+              <small id="statQueueDetail">Nenhum lote em andamento</small>
+            </article>
+          </div>
+
+          <div class="overview-grid">
+            <article class="panel activity-panel">
+              <div class="panel-title-row">
+                <div>
+                  <span class="section-kicker">ATIVIDADE</span>
+                  <h3>Últimos lotes</h3>
+                </div>
+              </div>
+              <div id="overviewJobs" class="job-list"></div>
+            </article>
+            <article class="panel quick-panel">
+              <span class="section-kicker">FLUXO RÁPIDO</span>
+              <h3>Do link ao grupo</h3>
+              <ol class="quick-steps">
+                <li><span>1</span><div><strong>Cole seu link</strong><small>Use o meli.la já afiliado.</small></div></li>
+                <li><span>2</span><div><strong>Escolha os grupos</strong><small>O painel lista seu WhatsApp.</small></div></li>
+                <li><span>3</span><div><strong>Envie com foto</strong><small>Acompanhe o status do lote.</small></div></li>
+              </ol>
+            </article>
+          </div>
+        </section>
+
+        <section class="view active-view" id="offersView">
+          <div class="import-panel">
+            <div class="import-copy">
+              <span class="section-kicker">MERCADO LIVRE</span>
+              <h2>Adicionar links prontos</h2>
+              <p>Cole um ou vários links <strong>meli.la</strong>. O link enviado ao WhatsApp será exatamente o que você cadastrar.</p>
+            </div>
+            <div class="import-form">
+              <textarea id="linkInput" rows="3" placeholder="https://meli.la/seu-link&#10;https://meli.la/outro-link" aria-label="Links do Mercado Livre"></textarea>
+              <button class="primary-button" id="importButton">
+                <span>＋</span> Salvar produtos
+              </button>
+            </div>
+          </div>
+
+          <div class="workspace-grid">
+            <section class="panel products-panel">
+              <div class="panel-title-row products-title">
+                <div>
+                  <h3>Produtos salvos <span class="count-badge" id="productCount">0</span></h3>
+                  <p id="selectionSummary">0 selecionados</p>
+                </div>
+                <div class="panel-actions">
+                  <button class="secondary-button" id="selectAllButton">Selecionar todos</button>
+                  <button class="secondary-button" id="shuffleButton">⇄ Embaralhar</button>
+                </div>
+              </div>
+
+              <div class="filters">
+                <label class="search-field">
+                  <span>⌕</span>
+                  <input id="productSearch" type="search" placeholder="Filtrar produtos">
+                </label>
+                <select id="statusFilter" aria-label="Filtrar por status">
+                  <option value="all">Todos os status</option>
+                  <option value="saved">Não enviado</option>
+                  <option value="sent">Enviado</option>
+                </select>
+              </div>
+
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th class="checkbox-col"><span class="sr-only">Selecionar</span></th>
+                      <th>Produto</th>
+                      <th>Preço</th>
+                      <th>Desconto</th>
+                      <th>Status</th>
+                      <th class="actions-col"><span class="sr-only">Ações</span></th>
+                    </tr>
+                  </thead>
+                  <tbody id="productTable"></tbody>
+                </table>
+                <div class="empty-state" id="productEmpty">
+                  <div class="empty-icon">↗</div>
+                  <strong>Nenhum produto salvo</strong>
+                  <span>Cole seu primeiro link do Mercado Livre acima.</span>
+                </div>
+              </div>
+            </section>
+
+            <aside class="panel groups-panel">
+              <div class="panel-title-row">
+                <div>
+                  <h3>Grupos <span class="count-badge" id="groupCount">0</span></h3>
+                  <p id="groupSummary">0 selecionados</p>
+                </div>
+                <button class="text-button" id="selectAllGroups">Todos</button>
+              </div>
+              <label class="search-field compact-search">
+                <span>⌕</span>
+                <input id="groupSearch" type="search" placeholder="Buscar grupo">
+              </label>
+              <div id="groupList" class="group-list"></div>
+            </aside>
+          </div>
+
+          <section class="send-dock" aria-label="Controles de envio">
+            <div class="send-summary">
+              <span class="send-icon">➤</span>
+              <div>
+                <strong id="sendTotal">Selecione produtos e grupos</strong>
+                <small id="sendDetail">Os envios serão feitos pelo WhatsApp conectado.</small>
+              </div>
+            </div>
+            <label class="delay-field">
+              <span>Intervalo</span>
+              <div><input id="delayInput" type="number" min="10" max="3600" value="120"><small>seg</small></div>
+            </label>
+            <button class="send-button" id="sendButton" disabled>Enviar ofertas</button>
+          </section>
+        </section>
+
+        <section class="view" id="settingsView" hidden>
+          <div class="section-heading">
+            <div>
+              <span class="section-kicker">PERSONALIZAÇÃO</span>
+              <h2>Modelo da mensagem</h2>
+              <p>Defina como cada produto aparecerá no WhatsApp.</p>
+            </div>
+          </div>
+
+          <div class="settings-grid">
+            <section class="panel template-editor">
+              <div class="panel-title-row">
+                <div><h3>Texto do envio</h3><p>O campo <code>{link}</code> é obrigatório.</p></div>
+              </div>
+              <div class="token-list" aria-label="Campos disponíveis">
+                <button data-token="{titulo}">{titulo}</button>
+                <button data-token="{preco}">{preco}</button>
+                <button data-token="{preco_original}">{preco_original}</button>
+                <button data-token="{desconto}">{desconto}</button>
+                <button data-token="{link}">{link}</button>
+              </div>
+              <textarea id="templateInput" rows="12" aria-label="Modelo da mensagem"></textarea>
+              <div class="settings-actions">
+                <label class="delay-setting">
+                  <span>Intervalo padrão entre produtos</span>
+                  <div><input id="defaultDelayInput" type="number" min="10" max="3600"><small>segundos</small></div>
+                </label>
+                <button class="primary-button" id="saveSettingsButton">Salvar modelo</button>
+              </div>
+            </section>
+
+            <aside class="panel preview-panel">
+              <span class="section-kicker">PRÉVIA</span>
+              <h3>Mensagem no WhatsApp</h3>
+              <div class="phone-preview">
+                <div class="phone-bar"><span></span><strong>PB Promoções</strong><i>•••</i></div>
+                <div class="chat-background">
+                  <div class="preview-image">FOTO DO PRODUTO</div>
+                  <div class="message-bubble" id="messagePreview"></div>
+                </div>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="connection-overlay" id="connectionOverlay" hidden>
+      <div class="connection-card">
+        <div class="connection-logo">PB</div>
+        <span class="section-kicker">CONEXÃO SEGURA</span>
+        <h2>Conecte seu WhatsApp</h2>
+        <p id="qrStatus">Preparando QR Code...</p>
+        <div class="qr-frame" id="qrFrame"><span class="spinner"></span></div>
+        <ol>
+          <li>Abra o WhatsApp no celular.</li>
+          <li>Entre em <strong>Aparelhos conectados</strong>.</li>
+          <li>Toque em <strong>Conectar aparelho</strong> e escaneie.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>
