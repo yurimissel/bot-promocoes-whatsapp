@@ -1,36 +1,79 @@
-const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 
 const SUPABASE_URL = String(process.env.SUPABASE_URL || '').trim().replace(/\/$/, '');
 const SUPABASE_KEY = String(
   process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || ''
 ).trim();
-const APP_URL = String(process.env.APP_URL || '').trim().replace(/\/$/, '');
-const ALLOW_SIGNUPS = String(process.env.ALLOW_SIGNUPS || 'true').toLowerCase() !== 'false';
-const SIGNUP_ACCESS_CODE = String(process.env.SIGNUP_ACCESS_CODE || '').trim();
+const SUPABASE_SECRET_KEY = String(
+  process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+).trim();
+const OWNER_EMAIL = String(process.env.OWNER_EMAIL || '').trim().toLowerCase();
+const PUBLIC_APP_URL = String(process.env.PUBLIC_APP_URL || process.env.APP_URL || '')
+  .trim()
+  .replace(/\/$/, '');
+
 const ACCESS_COOKIE = 'pb_access_token';
 const REFRESH_COOKIE = 'pb_refresh_token';
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
 
+const PERMISSION_DEFINITIONS = Object.freeze([
+  { key: 'overview', label: 'Visão geral', description: 'Ver indicadores e o histórico da operação.' },
+  { key: 'products', label: 'Produtos', description: 'Ver, cadastrar e excluir links de produtos.' },
+  { key: 'groups', label: 'Grupos', description: 'Ver, sincronizar e selecionar grupos de destino.' },
+  { key: 'send', label: 'Envios', description: 'Criar lotes e acompanhar o envio das ofertas.' },
+  { key: 'template', label: 'Modelo da mensagem', description: 'Ver e editar o texto usado nas publicações.' },
+  { key: 'whatsapp', label: 'WhatsApp', description: 'Conectar, trocar e administrar a sessão do WhatsApp.' },
+]);
+const PERMISSION_KEYS = Object.freeze(PERMISSION_DEFINITIONS.map((item) => item.key));
+
+function validEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || '').trim());
+}
+
 function isConfigured() {
   return /^https:\/\/[a-z0-9-]+\.supabase\.co$/i.test(SUPABASE_URL)
-    && SUPABASE_KEY.length >= 20;
+    && SUPABASE_KEY.length >= 20
+    && SUPABASE_SECRET_KEY.length >= 20
+    && validEmail(OWNER_EMAIL);
 }
 
-function signupsEnabled() {
-  return ALLOW_SIGNUPS && SIGNUP_ACCESS_CODE.length >= 8;
+function isOwnerEmail(value) {
+  return Boolean(OWNER_EMAIL)
+    && String(value || '').trim().toLowerCase() === OWNER_EMAIL;
 }
 
-function verifySignupAccessCode(value) {
-  if (!signupsEnabled()) return false;
-  const received = crypto.createHash('sha256').update(String(value || '')).digest();
-  const expected = crypto.createHash('sha256').update(SIGNUP_ACCESS_CODE).digest();
-  return crypto.timingSafeEqual(received, expected);
+function normalizePermissions(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  return Object.fromEntries(PERMISSION_KEYS.map((key) => [key, source[key] === true]));
+}
+
+function accessForUser(user) {
+  const owner = Boolean(user && isOwnerEmail(user.email));
+  const stored = normalizePermissions(user && user.app_metadata && user.app_metadata.pb_permissions);
+  const permissions = owner
+    ? Object.fromEntries(PERMISSION_KEYS.map((key) => [key, true]))
+    : stored;
+  return {
+    owner,
+    permissions,
+    hasAnyPermission: owner || Object.values(permissions).some(Boolean),
+  };
 }
 
 function createSupabaseClient() {
-  if (!isConfigured()) throw new Error('Supabase ainda não foi configurado no EasyPanel.');
+  if (!isConfigured()) throw new Error('A autenticação do painel ainda não foi configurada.');
   return createClient(SUPABASE_URL, SUPABASE_KEY, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+      detectSessionInUrl: false,
+    },
+  });
+}
+
+function createAdminClient() {
+  if (!isConfigured()) throw new Error('A autenticação do painel ainda não foi configurada.');
+  return createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
     auth: {
       autoRefreshToken: false,
       persistSession: false,
@@ -89,6 +132,7 @@ function clearSessionCookies(req, res) {
 function publicUser(user) {
   if (!user) return null;
   const metadata = user.user_metadata || {};
+  const access = accessForUser(user);
   return {
     id: user.id,
     email: user.email || '',
@@ -96,6 +140,10 @@ function publicUser(user) {
       || String(user.email || '').split('@')[0],
     emailConfirmed: Boolean(user.email_confirmed_at),
     createdAt: user.created_at || null,
+    lastSignInAt: user.last_sign_in_at || null,
+    owner: access.owner,
+    permissions: access.permissions,
+    hasAnyPermission: access.hasAnyPermission,
   };
 }
 
@@ -104,31 +152,50 @@ function friendlyAuthError(error) {
   if (/invalid login credentials/i.test(message)) return 'E-mail ou senha incorretos.';
   if (/email not confirmed/i.test(message)) return 'Confirme seu e-mail antes de entrar.';
   if (/user already registered/i.test(message)) return 'Já existe uma conta com este e-mail.';
-  if (/password.*(weak|short|characters)/i.test(message)) return 'Use uma senha mais forte, com pelo menos 8 caracteres.';
-  if (/rate limit|too many requests/i.test(message)) return 'Muitas tentativas. Aguarde alguns minutos.';
+  if (/email address not authorized/i.test(message)) {
+    return 'O serviço de e-mail ainda não está liberado para este endereço. Fale com o administrador.';
+  }
+  if (/password.*(weak|short|characters)/i.test(message)) {
+    return 'Use uma senha mais forte, com pelo menos 8 caracteres.';
+  }
+  if (/rate limit|too many requests/i.test(message)) {
+    return 'Muitas tentativas. Aguarde alguns minutos.';
+  }
   return message;
 }
 
-async function signUp({ name, email, password, accessCode }) {
-  if (!signupsEnabled()) {
-    throw new Error('A criação de contas ainda não foi liberada pelo administrador.');
-  }
-  if (!verifySignupAccessCode(accessCode)) {
-    throw new Error('Código de acesso incorreto.');
-  }
-  const supabase = createSupabaseClient();
-  const options = {
-    data: { full_name: name },
-  };
-  if (/^https?:\/\//i.test(APP_URL)) options.emailRedirectTo = APP_URL;
+function signupRedirectOptions() {
+  if (!/^https?:\/\//i.test(PUBLIC_APP_URL)) return {};
+  return { emailRedirectTo: PUBLIC_APP_URL };
+}
 
-  const { data, error } = await supabase.auth.signUp({ email, password, options });
+async function signUp({ name, email, password }) {
+  const supabase = createSupabaseClient();
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: { full_name: name },
+      ...signupRedirectOptions(),
+    },
+  });
   if (error) throw new Error(friendlyAuthError(error));
   return {
     user: publicUser(data.user),
     session: data.session,
     requiresEmailConfirmation: Boolean(data.user && !data.session),
   };
+}
+
+async function resendSignup(email) {
+  const supabase = createSupabaseClient();
+  const { error } = await supabase.auth.resend({
+    type: 'signup',
+    email,
+    options: signupRedirectOptions(),
+  });
+  if (error) throw new Error(friendlyAuthError(error));
+  return { ok: true };
 }
 
 async function signIn({ email, password }) {
@@ -141,7 +208,7 @@ async function signIn({ email, password }) {
 async function authenticateRequest(req, res, next) {
   res.set('Cache-Control', 'private, no-store');
   if (!isConfigured()) {
-    return res.status(503).json({ error: 'Configure o Supabase no EasyPanel para liberar o painel.' });
+    return res.status(503).json({ error: 'O acesso ao painel ainda está em configuração.' });
   }
 
   const cookies = parseCookies(req);
@@ -177,12 +244,79 @@ async function authenticateRequest(req, res, next) {
     }
 
     req.authUser = data.user;
+    req.authAccess = accessForUser(data.user);
     req.publicUser = publicUser(data.user);
     req.supabaseAccessToken = currentAccessToken;
     return next();
   } catch (_) {
     return res.status(503).json({ error: 'Não foi possível validar sua conta agora. Tente novamente.' });
   }
+}
+
+function requireOwner(req, res, next) {
+  if (req.authAccess && req.authAccess.owner) return next();
+  return res.status(403).json({ error: 'Somente o proprietário pode realizar esta ação.' });
+}
+
+function requirePermission(permission) {
+  if (!PERMISSION_KEYS.includes(permission)) throw new Error(`Permissão inválida: ${permission}`);
+  return (req, res, next) => {
+    if (req.authAccess && (req.authAccess.owner || req.authAccess.permissions[permission])) {
+      return next();
+    }
+    return res.status(403).json({ error: 'Sua conta ainda não tem permissão para esta função.' });
+  };
+}
+
+function requireAnyPermission(...permissions) {
+  const wanted = permissions.length > 0 ? permissions : PERMISSION_KEYS;
+  if (wanted.some((permission) => !PERMISSION_KEYS.includes(permission))) {
+    throw new Error('Uma permissão informada é inválida.');
+  }
+  return (req, res, next) => {
+    const access = req.authAccess;
+    if (access && (access.owner || wanted.some((key) => access.permissions[key]))) return next();
+    return res.status(403).json({ error: 'Sua conta ainda não tem permissão para esta função.' });
+  };
+}
+
+async function listUsers() {
+  const admin = createAdminClient();
+  const users = [];
+  const perPage = 1000;
+  for (let page = 1; page <= 10; page += 1) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage });
+    if (error) throw new Error(friendlyAuthError(error));
+    const batch = Array.isArray(data && data.users) ? data.users : [];
+    users.push(...batch);
+    if (batch.length < perPage) break;
+  }
+  return users
+    .map(publicUser)
+    .sort((a, b) => Number(b.owner) - Number(a.owner) || a.email.localeCompare(b.email));
+}
+
+async function updateUserPermissions(userId, permissions) {
+  const admin = createAdminClient();
+  const { data: current, error: getError } = await admin.auth.admin.getUserById(userId);
+  if (getError || !current || !current.user) {
+    throw new Error(getError ? friendlyAuthError(getError) : 'Conta não encontrada.');
+  }
+  if (isOwnerEmail(current.user.email)) return publicUser(current.user);
+
+  const appMetadata = current.user.app_metadata && typeof current.user.app_metadata === 'object'
+    ? current.user.app_metadata
+    : {};
+  const { data, error } = await admin.auth.admin.updateUserById(userId, {
+    app_metadata: {
+      ...appMetadata,
+      pb_permissions: normalizePermissions(permissions),
+    },
+  });
+  if (error || !data.user) {
+    throw new Error(error ? friendlyAuthError(error) : 'Não foi possível atualizar as permissões.');
+  }
+  return publicUser(data.user);
 }
 
 async function signOut(req, res) {
@@ -202,14 +336,22 @@ async function signOut(req, res) {
 }
 
 module.exports = {
-  ALLOW_SIGNUPS,
+  PERMISSION_DEFINITIONS,
+  PERMISSION_KEYS,
   isConfigured,
-  signupsEnabled,
-  verifySignupAccessCode,
+  isOwnerEmail,
+  normalizePermissions,
+  accessForUser,
   signUp,
+  resendSignup,
   signIn,
   signOut,
   authenticateRequest,
+  requireOwner,
+  requirePermission,
+  requireAnyPermission,
+  listUsers,
+  updateUserPermissions,
   setSessionCookies,
   clearSessionCookies,
   publicUser,

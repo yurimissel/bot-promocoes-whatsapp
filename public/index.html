@@ -20,21 +20,25 @@
         </div>
 
         <nav class="nav" aria-label="Navegação principal">
-          <button class="nav-item" data-view="overview">
+          <button class="nav-item" data-view="overview" data-permission="overview">
             <span class="nav-icon">⌂</span>
             <span>Visão geral</span>
           </button>
-          <button class="nav-item active" data-view="offers">
+          <button class="nav-item active" data-view="offers" data-permission-any="products,groups,send">
             <span class="nav-icon">➤</span>
             <span>Enviar ofertas</span>
           </button>
-          <button class="nav-item" data-view="whatsapp">
+          <button class="nav-item" data-view="whatsapp" data-permission="whatsapp">
             <span class="nav-icon">◉</span>
             <span>WhatsApp e grupos</span>
           </button>
-          <button class="nav-item" data-view="settings">
+          <button class="nav-item" data-view="settings" data-permission="template">
             <span class="nav-icon">⚙</span>
             <span>Modelo da mensagem</span>
+          </button>
+          <button class="nav-item" data-view="users" data-owner-only>
+            <span class="nav-icon">♙</span>
+            <span>Usuários e acessos</span>
           </button>
         </nav>
 
@@ -54,7 +58,7 @@
               <small>WhatsApp</small>
             </div>
           </div>
-          <span class="version">PB Painel v2.1 · Supabase</span>
+          <span class="version">PB Painel v2.2</span>
         </div>
       </aside>
 
@@ -80,7 +84,7 @@
               <span class="section-kicker">RESUMO</span>
               <h2>Operação de hoje</h2>
             </div>
-            <button class="primary-button" data-go-offers>Nova oferta</button>
+            <button class="primary-button" data-go-offers data-permission-any="products,groups,send">Nova oferta</button>
           </div>
 
           <div class="stats-grid">
@@ -129,7 +133,7 @@
         </section>
 
         <section class="view active-view" id="offersView">
-          <div class="import-panel">
+          <div class="import-panel" data-permission="products">
             <div class="import-copy">
               <span class="section-kicker">MERCADO LIVRE</span>
               <h2>Adicionar links prontos</h2>
@@ -144,7 +148,7 @@
           </div>
 
           <div class="workspace-grid">
-            <section class="panel products-panel">
+            <section class="panel products-panel" data-permission="products">
               <div class="panel-title-row products-title">
                 <div>
                   <h3>Produtos salvos <span class="count-badge" id="productCount">0</span></h3>
@@ -190,7 +194,7 @@
               </div>
             </section>
 
-            <aside class="panel groups-panel">
+            <aside class="panel groups-panel" data-permission="groups">
               <div class="panel-title-row">
                 <div>
                   <h3>Grupos <span class="count-badge" id="groupCount">0</span></h3>
@@ -209,7 +213,7 @@
             </aside>
           </div>
 
-          <section class="send-dock" aria-label="Controles de envio">
+          <section class="send-dock" aria-label="Controles de envio" data-permission="send">
             <div class="send-summary">
               <span class="send-icon">➤</span>
               <div>
@@ -323,6 +327,25 @@
             </aside>
           </div>
         </section>
+
+        <section class="view" id="usersView" hidden>
+          <div class="section-heading">
+            <div>
+              <span class="section-kicker">CONTROLE DE ACESSO</span>
+              <h2>Usuários e permissões</h2>
+              <p>Contas novas começam bloqueadas. Libere somente as funções que cada pessoa poderá usar.</p>
+            </div>
+            <button class="secondary-button" id="refreshUsersButton">Atualizar usuários</button>
+          </div>
+
+          <section class="panel users-panel">
+            <div class="users-help">
+              <span>✓</span>
+              <p>Sua conta proprietária sempre mantém acesso completo. Outros usuários só recebem as permissões marcadas e salvas aqui.</p>
+            </div>
+            <div id="usersList" class="users-list"></div>
+          </section>
+        </section>
       </main>
     </div>
 
@@ -338,7 +361,7 @@
             <h2>Suas ofertas, grupos e envios em um só lugar.</h2>
             <p>Entre para gerenciar seus links afiliados e publicar pelo WhatsApp conectado.</p>
           </div>
-          <div class="auth-security-note"><span>✓</span> Conta e sessão protegidas pelo Supabase</div>
+          <div class="auth-security-note"><span>✓</span> Conta e sessão protegidas</div>
         </section>
 
         <section class="auth-form-panel">
@@ -375,15 +398,26 @@
               <span>Confirmar senha</span>
               <input id="authPasswordConfirm" name="password-confirm" type="password" autocomplete="new-password" minlength="8" maxlength="128" placeholder="Digite a senha novamente">
             </label>
-            <label id="accessCodeField" hidden>
-              <span>Código de acesso</span>
-              <input id="authAccessCode" name="access-code" type="password" autocomplete="one-time-code" minlength="8" maxlength="128" placeholder="Código definido no EasyPanel">
-            </label>
             <div class="auth-feedback" id="authFeedback" hidden></div>
             <button class="auth-submit" id="authSubmit" type="submit">Entrar</button>
+            <button class="auth-link-button" id="resendConfirmationButton" type="button" hidden>Reenviar e-mail de confirmação</button>
           </form>
-          <p class="auth-footnote">Ao acessar, sua sessão permanece protegida neste navegador.</p>
+          <p class="auth-footnote">Contas novas aguardam a liberação individual das funções pelo administrador.</p>
         </section>
+      </div>
+    </div>
+
+    <div class="access-overlay" id="accessOverlay" hidden>
+      <div class="access-card">
+        <div class="connection-logo">PB</div>
+        <span class="section-kicker">CADASTRO RECEBIDO</span>
+        <h2>Aguardando liberação</h2>
+        <p>Sua conta foi criada, mas ainda não recebeu permissões para usar o painel.</p>
+        <strong id="pendingUserEmail">—</strong>
+        <div class="access-actions">
+          <button class="primary-button" id="pendingRefreshButton">Verificar liberação</button>
+          <button class="secondary-button" id="pendingLogoutButton">Sair</button>
+        </div>
       </div>
     </div>
 

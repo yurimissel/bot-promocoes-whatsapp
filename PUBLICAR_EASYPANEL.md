@@ -1,31 +1,51 @@
-# PB Promoções v2.1 — atualizar no EasyPanel
+# PB Promoções v2.2 — publicação e acesso
 
-Esta versão adiciona login e criação de conta com Supabase e corrige o envio
-dos lotes pelo WhatsApp. Produtos, sessão do WhatsApp e histórico continuam no
-volume persistente `/app/data`.
+Esta versão mantém a sessão e os dados operacionais no volume `/app/data`,
+abre o cadastro ao público e deixa toda conta nova sem permissões. Somente o
+e-mail definido como proprietário pode liberar cada função.
 
-## 1. Criar o projeto no Supabase
+## 1. Preparar a autenticação
 
-1. Crie um projeto em <https://supabase.com/dashboard>.
-2. Abra **Project Settings → API**.
-3. Copie a **Project URL**.
-4. Copie a **Publishable key**. Em projetos antigos, a chave `anon` também é
-   aceita. Nunca use a chave `service_role` neste aplicativo.
-5. Em **Authentication → URL Configuration**, coloque o domínio HTTPS do
-   aplicativo no campo **Site URL** e também em **Redirect URLs**.
+1. No painel do Supabase, crie ou abra o projeto.
+2. Em **Settings → API Keys**, copie:
+   - a **Publishable key**;
+   - uma **Secret key** exclusiva para este servidor. A chave `service_role`
+     antiga também funciona, mas a Secret key é a opção atual recomendada.
+3. Em **Authentication → URL Configuration**:
+   - use o endereço HTTPS do painel como **Site URL**;
+   - adicione o mesmo endereço em **Redirect URLs**.
+4. Mantenha o cadastro por e-mail e senha habilitado.
 
-Não é preciso criar tabelas nem executar SQL. As contas ficam no Supabase Auth.
+Para enviar confirmação a qualquer endereço, configure um SMTP próprio em
+**Authentication → SMTP**. O servidor de e-mail padrão do Supabase só entrega
+para endereços que fazem parte da equipe do projeto e não serve para cadastro
+público em produção. Depois de configurar o SMTP, o botão **Reenviar e-mail de
+confirmação** do painel funciona normalmente.
 
-## 2. Variáveis do EasyPanel
+Não é necessário criar tabela nem executar SQL. As permissões ficam no campo
+protegido `app_metadata` de cada conta e só são alteradas pelo servidor.
 
-Na aba **Environment**, substitua a autenticação antiga pelas variáveis abaixo:
+## 2. Criar a conta proprietária
+
+Para não depender do primeiro e-mail:
+
+1. Abra **Authentication → Users → Add user → Create new user**.
+2. Informe o e-mail que será usado como `OWNER_EMAIL` e uma senha nova e privada.
+3. Marque **Auto Confirm User** e conclua.
+
+Não grave a senha em variável, arquivo ou GitHub. Ela é digitada apenas na tela
+de criação da conta e depois no login.
+
+## 3. Variáveis privadas do aplicativo
+
+Na área **Environment**, configure:
 
 ```text
 SUPABASE_URL=https://SEU-PROJETO.supabase.co
 SUPABASE_PUBLISHABLE_KEY=SUA_CHAVE_PUBLICA
-APP_URL=https://SEU-DOMINIO-DO-EASYPANEL
-ALLOW_SIGNUPS=true
-SIGNUP_ACCESS_CODE=CRIE_UM_CODIGO_PRIVADO_COM_8_OU_MAIS_CARACTERES
+SUPABASE_SECRET_KEY=SUA_CHAVE_SECRETA_DO_SERVIDOR
+OWNER_EMAIL=proprietario@exemplo.com
+PUBLIC_APP_URL=https://SEU-DOMINIO-DO-PAINEL
 COOKIE_SECURE=true
 
 PORT=3000
@@ -35,56 +55,42 @@ WHATSAPP_START_DELAY_MS=35000
 LOG_LEVEL=INFO
 ```
 
-Remova `ADMIN_PASSWORD`: a proteção agora é feita pelo Supabase.
+Nunca coloque `SUPABASE_SECRET_KEY` no repositório. Ela deve existir somente na
+configuração privada do serviço.
 
-O `SIGNUP_ACCESS_CODE` impede que qualquer visitante crie uma conta e use o
-WhatsApp conectado. Compartilhe esse código apenas com pessoas autorizadas.
-Depois de criar as contas necessárias, você pode definir `ALLOW_SIGNUPS=false`.
+## 4. Atualizar o aplicativo
 
-## 3. Atualizar o código
+1. Substitua os arquivos antigos do repositório pelos desta versão.
+2. Não remova o volume montado em `/app/data`.
+3. Faça o commit e implante a nova versão.
+4. Aguarde o serviço ficar saudável e mais 35 a 60 segundos para a sessão do
+   WhatsApp ser carregada.
 
-1. Substitua no repositório todos os arquivos antigos pelos arquivos desta
-   versão.
-2. Não remova o volume `bot-data` montado em `/app/data`.
-3. Faça o commit no GitHub.
-4. No EasyPanel, clique em **Implantar**.
-5. Aguarde o aplicativo ficar **Healthy** e mais 35 a 60 segundos para a sessão
-   do Chromium ser carregada.
+O WhatsApp já conectado será reaproveitado pelo volume. Gere outro QR somente
+se a sessão tiver sido desconectada no celular.
 
-O WhatsApp já conectado será reaproveitado pelo volume. Não é necessário
-escanear outro QR, salvo se a sessão tiver sido desconectada no celular.
+## 5. Cadastro e liberação de usuários
 
-## 4. Primeiro acesso
+1. Qualquer visitante pode usar **Criar conta**; não há código de acesso.
+2. Depois da confirmação do e-mail, a conta entra em **Aguardando liberação**.
+3. Entre com a conta proprietária e abra **Usuários e acessos**.
+4. Marque separadamente as funções permitidas e clique em **Salvar permissões**.
+5. O usuário pode clicar em **Verificar liberação**; o painel também atualiza as
+   permissões automaticamente.
 
-1. Abra o domínio do painel.
-2. Clique em **Criar conta**.
-3. Informe nome, e-mail, senha e o `SIGNUP_ACCESS_CODE`.
-4. Se a confirmação de e-mail estiver habilitada no Supabase, confirme o link
-   recebido e depois entre.
-5. Abra **WhatsApp e grupos** e confirme que o status está `CONECTADO`.
+A conta proprietária sempre tem acesso completo. A permissão **WhatsApp** deve
+ser concedida somente a quem realmente puder conectar, trocar ou administrar a
+sessão. A chave secreta nunca é enviada ao navegador.
 
-## 5. Envio de teste
+## 6. Envio de teste
 
 1. Cole um link `meli.la` que já seja seu link afiliado.
-2. Selecione o produto e somente um grupo em que você possa enviar mensagens.
+2. Selecione o produto e apenas um grupo em que o número possa publicar.
 3. Clique em **Enviar ofertas**.
-4. O painel mostrará `NA FILA`, `ENVIANDO` e somente depois `CONCLUÍDO`.
-5. Se o WhatsApp recusar, o lote mostrará `FALHOU` e o motivo completo.
+4. O lote passa por `NA FILA`, `ENVIANDO` e só fica `CONCLUÍDO` depois do retorno
+   real do WhatsApp.
+5. Se a foto falhar, o painel tenta o texto com o link. Se o envio falhar, o
+   motivo fica visível no histórico.
 
-O envio tenta publicar foto e legenda. Se apenas a foto falhar, o texto com seu
-link é enviado automaticamente para não perder a oferta.
-O intervalo configurado é respeitado entre cada mensagem enviada aos grupos.
-
-## Segurança e funcionamento
-
-- Todos os endpoints de produtos, grupos, WhatsApp e envios exigem uma sessão
-  válida do Supabase.
-- Os tokens ficam em cookies HttpOnly; não são expostos ao JavaScript da página.
-- As contas autorizadas compartilham o mesmo WhatsApp e o mesmo painel desta
-  instalação.
-- Use apenas grupos nos quais você tem autorização para divulgar ofertas.
-- Esta versão não inicia a automação antiga do repositório original e não lê
-  mensagens de grupos. Somente links cadastrados no painel são enviados.
-- A imagem remove o pacote `extract-zip` depois da instalação. Ele pertence ao
-  downloader do Puppeteer, não é necessário porque o Chromium é instalado pelo
-  Debian, e atualmente não possui uma versão corrigida publicada.
+O aplicativo não lê mensagens recebidas e não copia links de outros grupos.
+Somente os links cadastrados e selecionados no painel são enviados.

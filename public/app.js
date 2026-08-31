@@ -11,6 +11,9 @@ const state = {
   user: null,
   authMode: 'login',
   authSettings: null,
+  permissionDefinitions: [],
+  users: [],
+  overview: null,
   appLoaded: false,
   initialProductsLoaded: false,
   watchedJobs: new Set(),
@@ -68,13 +71,12 @@ const elements = {
   signupTab: document.getElementById('signupTab'),
   nameField: document.getElementById('nameField'),
   confirmPasswordField: document.getElementById('confirmPasswordField'),
-  accessCodeField: document.getElementById('accessCodeField'),
   authName: document.getElementById('authName'),
   authEmail: document.getElementById('authEmail'),
   authPassword: document.getElementById('authPassword'),
   authPasswordConfirm: document.getElementById('authPasswordConfirm'),
-  authAccessCode: document.getElementById('authAccessCode'),
   authSubmit: document.getElementById('authSubmit'),
+  resendConfirmationButton: document.getElementById('resendConfirmationButton'),
   authFeedback: document.getElementById('authFeedback'),
   authConfigError: document.getElementById('authConfigError'),
   userCard: document.getElementById('userCard'),
@@ -83,6 +85,12 @@ const elements = {
   userEmail: document.getElementById('userEmail'),
   logoutButton: document.getElementById('logoutButton'),
   togglePassword: document.getElementById('togglePassword'),
+  accessOverlay: document.getElementById('accessOverlay'),
+  pendingUserEmail: document.getElementById('pendingUserEmail'),
+  pendingRefreshButton: document.getElementById('pendingRefreshButton'),
+  pendingLogoutButton: document.getElementById('pendingLogoutButton'),
+  usersList: document.getElementById('usersList'),
+  refreshUsersButton: document.getElementById('refreshUsersButton'),
 };
 
 function escapeHtml(value) {
@@ -113,7 +121,9 @@ async function api(path, options = {}) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    if (response.status === 401 && !['/api/auth/login', '/api/auth/signup', '/api/auth/me'].includes(path)) {
+    if (response.status === 401 && ![
+      '/api/auth/login', '/api/auth/signup', '/api/auth/resend-confirmation', '/api/auth/me',
+    ].includes(path)) {
       state.authenticated = false;
       showAuth('Sua sessão terminou. Entre novamente.');
     }
@@ -122,6 +132,18 @@ async function api(path, options = {}) {
     throw error;
   }
   return data;
+}
+
+function can(permission) {
+  return Boolean(state.user && (state.user.owner || (state.user.permissions && state.user.permissions[permission])));
+}
+
+function canAny(...permissions) {
+  return Boolean(state.user && (state.user.owner || permissions.some((permission) => can(permission))));
+}
+
+function hasPanelAccess() {
+  return Boolean(state.user && (state.user.owner || state.user.hasAnyPermission));
 }
 
 function toast(message, type = '') {
@@ -150,6 +172,7 @@ function renderUser() {
 function showAuth(message = '') {
   elements.authOverlay.hidden = false;
   elements.connectionOverlay.hidden = true;
+  elements.accessOverlay.hidden = true;
   elements.userCard.hidden = true;
   if (message) setAuthFeedback(message, 'error');
 }
@@ -158,6 +181,31 @@ function hideAuth() {
   setAuthFeedback('');
   elements.authOverlay.hidden = true;
   renderUser();
+}
+
+function showPendingAccess() {
+  elements.authOverlay.hidden = true;
+  elements.connectionOverlay.hidden = true;
+  elements.accessOverlay.hidden = false;
+  elements.pendingUserEmail.textContent = (state.user && state.user.email) || '—';
+  renderUser();
+}
+
+function hidePendingAccess() {
+  elements.accessOverlay.hidden = true;
+}
+
+function applyAccessUI() {
+  document.querySelectorAll('[data-owner-only]').forEach((element) => {
+    element.hidden = !(state.user && state.user.owner);
+  });
+  document.querySelectorAll('[data-permission]').forEach((element) => {
+    element.hidden = !can(element.dataset.permission);
+  });
+  document.querySelectorAll('[data-permission-any]').forEach((element) => {
+    const permissions = String(element.dataset.permissionAny || '').split(',').filter(Boolean);
+    element.hidden = !canAny(...permissions);
+  });
 }
 
 function setAuthMode(mode) {
@@ -169,25 +217,27 @@ function setAuthMode(mode) {
   elements.signupTab.setAttribute('aria-selected', String(signup));
   elements.nameField.hidden = !signup;
   elements.confirmPasswordField.hidden = !signup;
-  elements.accessCodeField.hidden = !signup;
   elements.authName.required = signup;
   elements.authPasswordConfirm.required = signup;
-  elements.authAccessCode.required = signup;
   elements.authPassword.autocomplete = signup ? 'new-password' : 'current-password';
   elements.authTitle.textContent = signup ? 'Criar sua conta' : 'Entrar no painel';
   elements.authSubtitle.textContent = signup
-    ? 'Cadastre-se com o código de acesso definido pelo administrador.'
+    ? 'Cadastre-se gratuitamente. As funções serão liberadas pelo administrador.'
     : 'Use seu e-mail e senha para continuar.';
   elements.authSubmit.textContent = signup ? 'Criar conta' : 'Entrar';
   elements.authPassword.value = '';
   elements.authPasswordConfirm.value = '';
-  elements.authAccessCode.value = '';
+  elements.resendConfirmationButton.hidden = true;
   setAuthFeedback('');
 }
 
 async function startApp() {
   if (state.appLoaded) return;
+  if (!hasPanelAccess()) return showPendingAccess();
   state.appLoaded = true;
+  hidePendingAccess();
+  applyAccessUI();
+  setView(state.activeView);
   try {
     await refreshAll();
   } catch (error) {
@@ -209,7 +259,7 @@ async function bootstrapAuth() {
 
   if (!state.authSettings.configured) {
     elements.authConfigError.hidden = false;
-    elements.authConfigError.textContent = 'Configure SUPABASE_URL e SUPABASE_PUBLISHABLE_KEY no EasyPanel e implante novamente.';
+    elements.authConfigError.textContent = 'O acesso ao painel ainda está em configuração. Tente novamente mais tarde.';
     elements.authSubmit.disabled = true;
     elements.signupTab.hidden = true;
     return;
@@ -224,11 +274,26 @@ async function bootstrapAuth() {
     const result = await api('/api/auth/me');
     state.authenticated = true;
     state.user = result.user;
+    state.permissionDefinitions = result.permissionDefinitions || [];
     hideAuth();
-    await startApp();
+    if (hasPanelAccess()) await startApp(); else showPendingAccess();
   } catch (error) {
     if (error.status !== 401) setAuthFeedback(error.message, 'error');
   }
+}
+
+function canView(view) {
+  return {
+    overview: can('overview'),
+    offers: canAny('products', 'groups', 'send'),
+    whatsapp: can('whatsapp'),
+    settings: can('template'),
+    users: Boolean(state.user && state.user.owner),
+  }[view] === true;
+}
+
+function firstAllowedView() {
+  return ['offers', 'overview', 'whatsapp', 'settings', 'users'].find(canView) || 'offers';
 }
 
 function setView(view) {
@@ -237,21 +302,24 @@ function setView(view) {
     offers: 'Enviar ofertas',
     whatsapp: 'WhatsApp e grupos',
     settings: 'Modelo da mensagem',
+    users: 'Usuários e acessos',
   };
-  state.activeView = view;
+  const allowedView = canView(view) ? view : firstAllowedView();
+  state.activeView = allowedView;
   document.querySelectorAll('.view').forEach((element) => {
-    const active = element.id === `${view}View`;
+    const active = element.id === `${allowedView}View`;
     element.hidden = !active;
     element.classList.toggle('active-view', active);
   });
   document.querySelectorAll('.nav-item').forEach((button) => {
-    button.classList.toggle('active', button.dataset.view === view);
+    button.classList.toggle('active', button.dataset.view === allowedView);
   });
-  elements.pageTitle.textContent = titles[view];
+  elements.pageTitle.textContent = titles[allowedView];
   elements.sidebar.classList.remove('open');
-  if (view === 'overview') renderOverview();
-  if (view === 'whatsapp') renderConnectionDetails();
-  if (view === 'settings') renderPreview();
+  if (allowedView === 'overview') renderOverview();
+  if (allowedView === 'whatsapp') renderConnectionDetails();
+  if (allowedView === 'settings') renderPreview();
+  if (allowedView === 'users' && state.user && state.user.owner) loadUsers();
 }
 
 function formatDate(value) {
@@ -383,13 +451,16 @@ function renderSelectionSummary() {
     elements.sendTotal.textContent = 'Selecione produtos e grupos';
     elements.sendDetail.textContent = 'Os envios serão feitos pelo WhatsApp conectado.';
   }
-  elements.sendButton.disabled = !state.ready || total === 0;
+  elements.sendButton.disabled = !can('send') || !state.ready || total === 0;
 }
 
 function renderOverview() {
-  document.getElementById('statProducts').textContent = state.products.length;
-  document.getElementById('statGroups').textContent = state.groups.length;
-  document.getElementById('statSent').textContent = state.products.reduce((total, item) => total + Number(item.sendCount || 0), 0);
+  const overview = state.overview || {};
+  document.getElementById('statProducts').textContent = Number(overview.products ?? state.products.length);
+  document.getElementById('statGroups').textContent = Number(overview.groups ?? state.groups.length);
+  document.getElementById('statSent').textContent = Number(
+    overview.sent ?? state.products.reduce((total, item) => total + Number(item.sendCount || 0), 0)
+  );
   const activeJob = state.jobs.find((job) => job.status === 'queued' || job.status === 'sending');
   document.getElementById('statQueue').textContent = activeJob ? `${activeJob.completed}/${activeJob.total}` : 'Livre';
   document.getElementById('statQueueDetail').textContent = activeJob ? (activeJob.currentProduct || 'Preparando lote') : 'Nenhum lote em andamento';
@@ -428,6 +499,7 @@ function renderPreview() {
 }
 
 async function refreshStatus() {
+  if (!hasPanelAccess()) return;
   try {
     const status = await api('/api/status');
     const wasReady = state.ready;
@@ -437,15 +509,17 @@ async function refreshStatus() {
     elements.sidebarStatus.textContent = status.ready ? 'Conectado' : 'Aguardando';
     elements.connectionPill.querySelector('.status-dot').classList.toggle('online', status.ready);
     elements.sidebarStatusDot.classList.toggle('online', status.ready);
-    elements.connectionOverlay.hidden = status.ready;
+    elements.connectionOverlay.hidden = status.ready || !can('whatsapp');
     elements.qrStatus.textContent = status.status;
     if (!status.ready && status.qr) {
       elements.qrFrame.innerHTML = `<img src="${status.qr}" alt="QR Code do WhatsApp">`;
     } else if (!status.ready) {
       elements.qrFrame.innerHTML = '<span class="spinner"></span>';
     }
-    if (!wasReady && status.ready) await loadGroups(true, true);
-    else if (status.ready && Number(status.groupsCount) !== state.groups.length) await loadGroups(false, true);
+    if (can('groups') && !wasReady && status.ready) await loadGroups(true, true);
+    else if (can('groups') && status.ready && Number(status.groupsCount) !== state.groups.length) {
+      await loadGroups(false, true);
+    }
     renderConnectionDetails();
     renderSelectionSummary();
   } catch (error) {
@@ -454,6 +528,7 @@ async function refreshStatus() {
 }
 
 async function loadProducts() {
+  if (!can('products')) return;
   const data = await api('/api/products');
   state.products = data.products;
   if (!state.initialProductsLoaded) {
@@ -466,6 +541,7 @@ async function loadProducts() {
 }
 
 async function loadGroups(force = false, quiet = false) {
+  if (!can('groups')) return;
   if (!state.ready) return renderGroups();
   if (state.groupsLoading) return;
   state.groupsLoading = true;
@@ -484,6 +560,7 @@ async function loadGroups(force = false, quiet = false) {
 }
 
 async function loadSettings() {
+  if (!canAny('template', 'send')) return;
   state.settings = await api('/api/settings');
   elements.templateInput.value = state.settings.template;
   elements.defaultDelayInput.value = state.settings.defaultDelaySeconds;
@@ -492,10 +569,19 @@ async function loadSettings() {
 }
 
 async function loadJobs() {
+  if (!canAny('overview', 'send')) return;
   const data = await api('/api/jobs');
   state.jobs = data.jobs;
   renderJobs();
   if (state.activeView === 'overview') renderOverview();
+}
+
+async function loadOverview() {
+  if (!can('overview')) return;
+  const data = await api('/api/overview');
+  state.overview = data;
+  state.jobs = Array.isArray(data.jobs) ? data.jobs : state.jobs;
+  renderOverview();
 }
 
 function jobFailureMessage(job) {
@@ -524,7 +610,7 @@ async function watchJob(jobId) {
           elements.sendDetail.textContent = `${job.completed} mensagem${job.completed === 1 ? '' : 'ens'} confirmada${job.completed === 1 ? '' : 's'} pelo WhatsApp.`;
           toast(`${job.completed} mensagem${job.completed === 1 ? '' : 'ens'} enviada${job.completed === 1 ? '' : 's'} e confirmada${job.completed === 1 ? '' : 's'} pelo WhatsApp.`, 'success');
         }
-        await loadProducts();
+        if (can('products')) await loadProducts();
         return;
       }
       if (job.status === 'failed' || job.status === 'interrupted') {
@@ -545,17 +631,102 @@ async function watchJob(jobId) {
 
 async function refreshAll() {
   await refreshStatus();
-  await Promise.all([loadProducts(), loadSettings(), loadJobs()]);
-  if (state.ready) await loadGroups();
-  renderOverview();
+  const tasks = [];
+  if (can('overview')) tasks.push(loadOverview());
+  if (can('products')) tasks.push(loadProducts());
+  if (canAny('template', 'send')) tasks.push(loadSettings());
+  if (!can('overview') && can('send')) tasks.push(loadJobs());
+  await Promise.all(tasks);
+  if (state.ready && can('groups')) await loadGroups();
+  if (can('overview')) renderOverview();
 }
+
+function renderUsers() {
+  if (!elements.usersList) return;
+  if (state.users.length === 0) {
+    elements.usersList.innerHTML = '<div class="users-empty">Nenhuma conta cadastrada ainda.</div>';
+    return;
+  }
+  elements.usersList.innerHTML = state.users.map((user) => {
+    const permissions = user.permissions || {};
+    const options = state.permissionDefinitions.map((permission) => `
+      <label class="permission-option">
+        <input type="checkbox" data-permission-key="${escapeHtml(permission.key)}"
+          ${permissions[permission.key] ? 'checked' : ''} ${user.owner ? 'disabled' : ''}>
+        <span><strong>${escapeHtml(permission.label)}</strong><small>${escapeHtml(permission.description)}</small></span>
+      </label>`).join('');
+    const accountStatus = user.owner
+      ? '<span class="owner-badge">PROPRIETÁRIO</span>'
+      : `<span class="status-tag ${user.emailConfirmed ? 'completed' : 'partial'}">${user.emailConfirmed ? 'E-MAIL CONFIRMADO' : 'PENDENTE'}</span>`;
+    return `<article class="access-user" data-user-id="${escapeHtml(user.id)}">
+      <div class="access-user-head">
+        <span class="access-user-avatar">${escapeHtml((user.name || user.email || 'U').slice(0, 1).toUpperCase())}</span>
+        <div class="access-user-copy"><strong>${escapeHtml(user.name || 'Usuário')}</strong><small>${escapeHtml(user.email)} · cadastro ${escapeHtml(formatDate(user.createdAt))}</small></div>
+        ${accountStatus}
+      </div>
+      <div class="permission-grid">${options}</div>
+      ${user.owner ? '' : '<div class="access-user-actions"><button class="primary-button" data-save-user>Salvar permissões</button></div>'}
+    </article>`;
+  }).join('');
+}
+
+async function loadUsers(quiet = false) {
+  if (!(state.user && state.user.owner)) return;
+  if (!quiet) elements.usersList.innerHTML = '<div class="users-empty">Carregando usuários...</div>';
+  try {
+    const data = await api('/api/admin/users');
+    state.users = Array.isArray(data.users) ? data.users : [];
+    state.permissionDefinitions = Array.isArray(data.permissions) ? data.permissions : state.permissionDefinitions;
+    renderUsers();
+  } catch (error) {
+    elements.usersList.innerHTML = `<div class="users-empty">${escapeHtml(error.message)}</div>`;
+    if (!quiet) toast(error.message, 'error');
+  }
+}
+
+elements.usersList.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-save-user]');
+  if (!button) return;
+  const card = button.closest('[data-user-id]');
+  if (!card) return;
+  const permissions = {};
+  card.querySelectorAll('[data-permission-key]').forEach((input) => {
+    permissions[input.dataset.permissionKey] = input.checked;
+  });
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Salvando...';
+  try {
+    const data = await api(`/api/admin/users/${encodeURIComponent(card.dataset.userId)}/permissions`, {
+      method: 'PUT',
+      body: JSON.stringify({ permissions }),
+    });
+    state.users = state.users.map((user) => user.id === data.user.id ? data.user : user);
+    renderUsers();
+    toast('Permissões atualizadas.', 'success');
+  } catch (error) {
+    toast(error.message, 'error');
+    button.disabled = false;
+    button.textContent = original;
+  }
+});
+
+elements.refreshUsersButton.addEventListener('click', async () => {
+  elements.refreshUsersButton.disabled = true;
+  try {
+    await loadUsers(true);
+    toast('Lista de usuários atualizada.', 'success');
+  } finally {
+    elements.refreshUsersButton.disabled = false;
+  }
+});
 
 elements.loginTab.addEventListener('click', () => setAuthMode('login'));
 elements.signupTab.addEventListener('click', () => setAuthMode('signup'));
 
 elements.togglePassword.addEventListener('click', () => {
   const show = elements.authPassword.type === 'password';
-  [elements.authPassword, elements.authPasswordConfirm, elements.authAccessCode].forEach((input) => {
+  [elements.authPassword, elements.authPasswordConfirm].forEach((input) => {
     input.type = show ? 'text' : 'password';
   });
   elements.togglePassword.textContent = show ? '◌' : '◉';
@@ -568,7 +739,6 @@ elements.authForm.addEventListener('submit', async (event) => {
   const email = elements.authEmail.value.trim();
   const password = elements.authPassword.value;
   const name = elements.authName.value.trim();
-  const accessCode = elements.authAccessCode.value;
 
   if (!email || !password) return setAuthFeedback('Informe e-mail e senha.');
   if (password.length < 8) return setAuthFeedback('A senha precisa ter pelo menos 8 caracteres.');
@@ -576,7 +746,6 @@ elements.authForm.addEventListener('submit', async (event) => {
   if (signup && password !== elements.authPasswordConfirm.value) {
     return setAuthFeedback('As senhas não são iguais.');
   }
-  if (signup && accessCode.length < 8) return setAuthFeedback('Informe o código de acesso.');
 
   const original = elements.authSubmit.textContent;
   elements.authSubmit.disabled = true;
@@ -585,18 +754,24 @@ elements.authForm.addEventListener('submit', async (event) => {
   try {
     const result = await api(signup ? '/api/auth/signup' : '/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ name, email, password, accessCode }),
+      body: JSON.stringify({ name, email, password }),
     });
     if (result.authenticated) {
       state.authenticated = true;
       state.user = result.user;
+      state.permissionDefinitions = result.permissionDefinitions || state.permissionDefinitions;
       hideAuth();
-      await startApp();
-      toast(signup ? 'Conta criada e painel liberado.' : 'Login realizado.', 'success');
+      if (hasPanelAccess()) {
+        await startApp();
+        toast(signup ? 'Conta criada.' : 'Login realizado.', 'success');
+      } else {
+        showPendingAccess();
+      }
     } else if (result.requiresEmailConfirmation) {
       setAuthMode('login');
       elements.authEmail.value = email;
       setAuthFeedback('Conta criada. Confirme o link enviado ao seu e-mail e depois entre.', 'success');
+      elements.resendConfirmationButton.hidden = false;
     }
   } catch (error) {
     setAuthFeedback(error.message, 'error');
@@ -610,8 +785,25 @@ elements.authForm.addEventListener('submit', async (event) => {
   }
 });
 
-elements.logoutButton.addEventListener('click', async () => {
-  elements.logoutButton.disabled = true;
+elements.resendConfirmationButton.addEventListener('click', async () => {
+  const email = elements.authEmail.value.trim();
+  if (!email) return setAuthFeedback('Informe seu e-mail para reenviar a confirmação.');
+  elements.resendConfirmationButton.disabled = true;
+  try {
+    await api('/api/auth/resend-confirmation', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+    setAuthFeedback('Novo e-mail de confirmação enviado.', 'success');
+  } catch (error) {
+    setAuthFeedback(error.message, 'error');
+  } finally {
+    elements.resendConfirmationButton.disabled = false;
+  }
+});
+
+async function performLogout(button) {
+  if (button) button.disabled = true;
   try {
     await api('/api/auth/logout', { method: 'POST' });
   } catch (_) {
@@ -623,11 +815,41 @@ elements.logoutButton.addEventListener('click', async () => {
     state.products = [];
     state.groups = [];
     state.jobs = [];
+    state.users = [];
+    state.overview = null;
+    state.permissionDefinitions = [];
     state.selectedProducts.clear();
     state.selectedGroups.clear();
-    elements.logoutButton.disabled = false;
+    hidePendingAccess();
+    if (button) button.disabled = false;
     setAuthMode('login');
     showAuth('Você saiu da conta.');
+  }
+}
+
+elements.logoutButton.addEventListener('click', () => performLogout(elements.logoutButton));
+elements.pendingLogoutButton.addEventListener('click', () => performLogout(elements.pendingLogoutButton));
+
+elements.pendingRefreshButton.addEventListener('click', async () => {
+  elements.pendingRefreshButton.disabled = true;
+  elements.pendingRefreshButton.textContent = 'Verificando...';
+  try {
+    const result = await api('/api/auth/me');
+    state.user = result.user;
+    state.permissionDefinitions = result.permissionDefinitions || state.permissionDefinitions;
+    if (hasPanelAccess()) {
+      hidePendingAccess();
+      await startApp();
+      toast('Seu acesso foi liberado.', 'success');
+    } else {
+      toast('Sua conta ainda aguarda liberação.');
+    }
+  } catch (error) {
+    if (error.status === 401) showAuth('Sua sessão terminou. Entre novamente.');
+    else toast(error.message, 'error');
+  } finally {
+    elements.pendingRefreshButton.disabled = false;
+    elements.pendingRefreshButton.textContent = 'Verificar liberação';
   }
 });
 
@@ -881,14 +1103,35 @@ elements.sendButton.addEventListener('click', async () => {
 });
 
 bootstrapAuth().catch((error) => setAuthFeedback(error.message, 'error'));
-setInterval(() => {
-  if (state.authenticated) refreshStatus();
-}, 5000);
 setInterval(async () => {
   if (!state.authenticated) return;
   try {
+    const result = await api('/api/auth/me');
+    state.user = result.user;
+    state.permissionDefinitions = result.permissionDefinitions || state.permissionDefinitions;
+    renderUser();
+    if (!hasPanelAccess()) {
+      state.appLoaded = false;
+      showPendingAccess();
+      return;
+    }
+    applyAccessUI();
+    if (!state.appLoaded) await startApp();
+    else if (!canView(state.activeView)) setView(firstAllowedView());
+  } catch (_) {
+    // A validação normal da sessão exibirá a tela de login quando necessário.
+  }
+}, 30000);
+setInterval(() => {
+  if (state.authenticated && hasPanelAccess()) refreshStatus();
+}, 5000);
+setInterval(async () => {
+  if (!state.authenticated || !canAny('overview', 'send')) return;
+  try {
     await loadJobs();
-    if (state.jobs.some((job) => job.status === 'sending' || job.status === 'queued')) await loadProducts();
+    if (can('products') && state.jobs.some((job) => job.status === 'sending' || job.status === 'queued')) {
+      await loadProducts();
+    }
   } catch (_) {
     // A próxima atualização tenta novamente.
   }

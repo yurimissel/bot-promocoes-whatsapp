@@ -1,23 +1,24 @@
-# PB Promoções v2.1
+# PB Promoções v2.2
 
-Painel web para cadastrar links `meli.la` já afiliados, carregar os grupos do
-WhatsApp conectado e enviar ofertas com foto e texto personalizado.
+Painel web para cadastrar links `meli.la` já afiliados, selecionar grupos do
+WhatsApp e enviar ofertas com foto e mensagem personalizada.
 
 ## Recursos
 
-- Login e criação de conta pelo Supabase Auth.
+- Login e cadastro público com confirmação de e-mail e reenvio da confirmação.
+- Conta proprietária definida por variável privada do servidor.
+- Contas novas sem acesso até o proprietário liberar cada permissão.
+- Administração individual de Visão geral, Produtos, Grupos, Envios, Modelo e WhatsApp.
+- Verificação das permissões no servidor em todas as rotas protegidas.
 - Cadastro de links afiliados sem alterar a URL informada.
-- Leitura de título, preço e foto do Mercado Livre.
 - Lista real dos grupos da conta conectada por QR Code.
-- Seleção de produtos e grupos.
-- Fila sequencial com histórico e motivo de falha visível.
-- Confirmação do retorno de `sendMessage` antes de marcar como enviado.
-- Fallback automático para texto se o envio da foto falhar.
-- Volume persistente para sessão do WhatsApp e dados do painel.
+- Fila sequencial, histórico, confirmação do envio e erro detalhado.
+- Foto com fallback automático para texto.
+- Sessão do WhatsApp e dados operacionais persistidos em `/app/data`.
 
 ## Publicação
 
-Use o `Dockerfile` no EasyPanel, porta `3000` e um volume em `/app/data`.
+Use o `Dockerfile`, exponha a porta `3000` e mantenha um volume em `/app/data`.
 As instruções completas estão em [PUBLICAR_EASYPANEL.md](PUBLICAR_EASYPANEL.md).
 
 Variáveis obrigatórias:
@@ -25,17 +26,18 @@ Variáveis obrigatórias:
 ```text
 SUPABASE_URL=
 SUPABASE_PUBLISHABLE_KEY=
-APP_URL=
-SIGNUP_ACCESS_CODE=
-ALLOW_SIGNUPS=true
+SUPABASE_SECRET_KEY=
+OWNER_EMAIL=
+PUBLIC_APP_URL=
 COOKIE_SECURE=true
 PORT=3000
 DATA_DIR=/app/data
 WWEBJS_AUTH_PATH=/app/data/.wwebjs_auth
 ```
 
-Não use uma chave `service_role` do Supabase. A chave pública/publishable é a
-correta para este aplicativo.
+A chave secreta é usada somente pelo servidor para listar contas e salvar
+permissões em `app_metadata`. Nunca coloque essa chave no JavaScript público ou
+no repositório.
 
 ## Desenvolvimento local
 
@@ -55,10 +57,9 @@ DISABLE_WHATSAPP=true node web-setup.js
 
 - O painel envia exatamente o link afiliado cadastrado; ele não gera nem troca
   links automaticamente.
-- As contas criadas com o código de acesso compartilham a mesma operação desta
-  instalação (WhatsApp, produtos, grupos e histórico).
-- O painel não lê mensagens recebidas nem copia links de outros grupos. Ele
-  envia somente os produtos cadastrados e selecionados por um usuário logado.
+- O painel não lê mensagens recebidas nem copia links de outros grupos.
+- Somente o proprietário ou um usuário com a permissão `WhatsApp` pode ver o QR
+  Code e administrar a sessão.
 - `whatsapp-web.js` usa automação não oficial do WhatsApp Web. O funcionamento
-  pode ser afetado por mudanças do WhatsApp e deve ser usado respeitando as
-  regras da plataforma e dos grupos.
+  pode ser afetado por mudanças do WhatsApp e deve respeitar as regras da
+  plataforma e dos grupos.

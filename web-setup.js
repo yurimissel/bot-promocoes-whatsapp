@@ -214,18 +214,17 @@ app.get('/api/auth/settings', (req, res) => {
   res.set('Cache-Control', 'private, no-store');
   return res.json({
     configured: supabaseAuth.isConfigured(),
-    allowSignups: supabaseAuth.signupsEnabled(),
+    allowSignups: true,
   });
 });
 
 app.post('/api/auth/signup', authRateLimit, async (req, res) => {
   if (!supabaseAuth.isConfigured()) {
-    return res.status(503).json({ error: 'Configure o Supabase no EasyPanel antes de criar contas.' });
+    return res.status(503).json({ error: 'A criação de contas ainda está em configuração.' });
   }
   const name = String((req.body && req.body.name) || '').trim();
   const email = String((req.body && req.body.email) || '').trim().toLowerCase();
   const password = String((req.body && req.body.password) || '');
-  const accessCode = String((req.body && req.body.accessCode) || '');
   if (name.length < 2 || name.length > 80) {
     return res.status(400).json({ error: 'Informe seu nome com 2 a 80 caracteres.' });
   }
@@ -237,13 +236,30 @@ app.post('/api/auth/signup', authRateLimit, async (req, res) => {
   }
 
   try {
-    const result = await supabaseAuth.signUp({ name, email, password, accessCode });
+    const result = await supabaseAuth.signUp({ name, email, password });
     if (result.session) supabaseAuth.setSessionCookies(req, res, result.session);
     return res.status(201).json({
       user: result.user,
       authenticated: Boolean(result.session),
       requiresEmailConfirmation: result.requiresEmailConfirmation,
+      permissionDefinitions: supabaseAuth.PERMISSION_DEFINITIONS,
     });
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/auth/resend-confirmation', authRateLimit, async (req, res) => {
+  if (!supabaseAuth.isConfigured()) {
+    return res.status(503).json({ error: 'A criação de contas ainda está em configuração.' });
+  }
+  const email = String((req.body && req.body.email) || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+    return res.status(400).json({ error: 'Informe um e-mail válido.' });
+  }
+  try {
+    await supabaseAuth.resendSignup(email);
+    return res.json({ ok: true });
   } catch (error) {
     return res.status(400).json({ error: error.message });
   }
@@ -251,7 +267,7 @@ app.post('/api/auth/signup', authRateLimit, async (req, res) => {
 
 app.post('/api/auth/login', authRateLimit, async (req, res) => {
   if (!supabaseAuth.isConfigured()) {
-    return res.status(503).json({ error: 'Configure o Supabase no EasyPanel antes de entrar.' });
+    return res.status(503).json({ error: 'O acesso ao painel ainda está em configuração.' });
   }
   const email = String((req.body && req.body.email) || '').trim().toLowerCase();
   const password = String((req.body && req.body.password) || '');
@@ -260,7 +276,11 @@ app.post('/api/auth/login', authRateLimit, async (req, res) => {
   try {
     const result = await supabaseAuth.signIn({ email, password });
     supabaseAuth.setSessionCookies(req, res, result.session);
-    return res.json({ authenticated: true, user: result.user });
+    return res.json({
+      authenticated: true,
+      user: result.user,
+      permissionDefinitions: supabaseAuth.PERMISSION_DEFINITIONS,
+    });
   } catch (error) {
     return res.status(401).json({ error: error.message });
   }
@@ -272,15 +292,61 @@ app.post('/api/auth/logout', async (req, res) => {
 });
 
 app.get('/api/auth/me', supabaseAuth.authenticateRequest, (req, res) => {
-  return res.json({ authenticated: true, user: req.publicUser });
+  return res.json({
+    authenticated: true,
+    user: req.publicUser,
+    permissionDefinitions: supabaseAuth.PERMISSION_DEFINITIONS,
+  });
 });
 
 app.use('/api', supabaseAuth.authenticateRequest);
 
-app.get('/api/status', async (req, res) => {
+const requireAnyAccess = supabaseAuth.requireAnyPermission();
+const requireOverview = supabaseAuth.requirePermission('overview');
+const requireProducts = supabaseAuth.requirePermission('products');
+const requireGroups = supabaseAuth.requirePermission('groups');
+const requireSend = supabaseAuth.requirePermission('send');
+const requireTemplate = supabaseAuth.requirePermission('template');
+const requireWhatsApp = supabaseAuth.requirePermission('whatsapp');
+
+app.get('/api/admin/users', supabaseAuth.requireOwner, async (req, res) => {
+  try {
+    const users = await supabaseAuth.listUsers();
+    return res.json({ users, permissions: supabaseAuth.PERMISSION_DEFINITIONS });
+  } catch (error) {
+    logger.error('[Acessos] Erro ao listar contas:', error.message);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/admin/users/:id/permissions', supabaseAuth.requireOwner, async (req, res) => {
+  const id = String(req.params.id || '').trim();
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return res.status(400).json({ error: 'Conta inválida.' });
+  try {
+    const user = await supabaseAuth.updateUserPermissions(id, req.body && req.body.permissions);
+    return res.json({ user });
+  } catch (error) {
+    logger.error('[Acessos] Erro ao salvar permissões:', error.message);
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+app.get('/api/overview', requireOverview, (req, res) => {
+  const products = store.listProducts();
+  const jobs = store.listJobs();
+  return res.json({
+    products: products.length,
+    groups: groupCache.length,
+    sent: products.reduce((total, item) => total + Number(item.sendCount || 0), 0),
+    jobs,
+  });
+});
+
+app.get('/api/status', requireAnyAccess, async (req, res) => {
   if (isAuthenticated || isReady) await refreshConnectionState();
+  const canManageWhatsApp = req.authAccess.owner || req.authAccess.permissions.whatsapp;
   let qr = null;
-  if (qrCodeData && !isReady) {
+  if (canManageWhatsApp && qrCodeData && !isReady) {
     try {
       qr = await QRCode.toDataURL(qrCodeData, { width: 320, margin: 3 });
     } catch (error) {
@@ -293,8 +359,8 @@ app.get('/api/status', async (req, res) => {
     ready: isReady,
     status: connectionStatus,
     state: connectionState,
-    account: accountInfo(),
-    webVersion,
+    account: canManageWhatsApp ? accountInfo() : null,
+    webVersion: canManageWhatsApp ? webVersion : '',
     groupsCount: groupCache.length,
     lastGroupSyncAt,
     error: whatsappError,
@@ -302,7 +368,7 @@ app.get('/api/status', async (req, res) => {
   });
 });
 
-app.get('/api/groups', async (req, res) => {
+app.get('/api/groups', requireGroups, async (req, res) => {
   try {
     const groups = await syncGroups(false);
     return res.json({ groups, syncedAt: lastGroupSyncAt, warnings: lastGroupWarnings });
@@ -312,7 +378,7 @@ app.get('/api/groups', async (req, res) => {
   }
 });
 
-app.post('/api/groups/sync', async (req, res) => {
+app.post('/api/groups/sync', requireGroups, async (req, res) => {
   try {
     const groups = await syncGroups(true);
     return res.json({ groups, syncedAt: lastGroupSyncAt, warnings: lastGroupWarnings });
@@ -322,7 +388,7 @@ app.post('/api/groups/sync', async (req, res) => {
   }
 });
 
-app.post('/api/groups/manual', async (req, res) => {
+app.post('/api/groups/manual', requireGroups, async (req, res) => {
   const value = String((req.body && req.body.id) || '').trim();
   let id = value;
   let requestedName = String((req.body && req.body.name) || '').trim();
@@ -360,13 +426,13 @@ app.post('/api/groups/manual', async (req, res) => {
   return res.status(201).json({ groups });
 });
 
-app.delete('/api/groups/manual/:id', async (req, res) => {
+app.delete('/api/groups/manual/:id', requireGroups, async (req, res) => {
   store.removeCustomGroup(req.params.id);
   const groups = await syncGroups(true).catch(() => []);
   return res.json({ groups });
 });
 
-app.post('/api/whatsapp/reconnect', async (req, res) => {
+app.post('/api/whatsapp/reconnect', requireWhatsApp, async (req, res) => {
   try {
     connectionStatus = 'Reconectando ao WhatsApp...';
     whatsappError = '';
@@ -391,7 +457,7 @@ app.post('/api/whatsapp/reconnect', async (req, res) => {
   }
 });
 
-app.post('/api/whatsapp/new-qr', async (req, res) => {
+app.post('/api/whatsapp/new-qr', requireWhatsApp, async (req, res) => {
   try {
     connectionStatus = 'Removendo a sessão antiga...';
     isAuthenticated = false;
@@ -416,9 +482,9 @@ app.post('/api/whatsapp/new-qr', async (req, res) => {
   }
 });
 
-app.get('/api/products', (req, res) => res.json({ products: store.listProducts() }));
+app.get('/api/products', requireProducts, (req, res) => res.json({ products: store.listProducts() }));
 
-app.post('/api/products/import', async (req, res) => {
+app.post('/api/products/import', requireProducts, async (req, res) => {
   const links = extractLinks(req.body && req.body.links);
   if (links.length === 0) return res.status(400).json({ error: 'Cole pelo menos um link HTTPS.' });
 
@@ -437,15 +503,17 @@ app.post('/api/products/import', async (req, res) => {
   return res.status(imported.length > 0 ? 200 : 422).json({ imported, errors });
 });
 
-app.delete('/api/products/:id', (req, res) => {
+app.delete('/api/products/:id', requireProducts, (req, res) => {
   const removed = store.removeProduct(req.params.id);
   if (!removed) return res.status(404).json({ error: 'Produto não encontrado.' });
   return res.json({ ok: true });
 });
 
-app.get('/api/settings', (req, res) => res.json(store.getSettings()));
+app.get('/api/settings', supabaseAuth.requireAnyPermission('template', 'send'), (req, res) => {
+  return res.json(store.getSettings());
+});
 
-app.put('/api/settings', (req, res) => {
+app.put('/api/settings', requireTemplate, (req, res) => {
   const template = String((req.body && req.body.template) || '').trim();
   const defaultDelaySeconds = Number(req.body && req.body.defaultDelaySeconds);
   if (!template.includes('{link}')) {
@@ -458,9 +526,11 @@ app.put('/api/settings', (req, res) => {
   return res.json(store.updateSettings({ template, defaultDelaySeconds }));
 });
 
-app.get('/api/jobs', (req, res) => res.json({ jobs: store.listJobs() }));
+app.get('/api/jobs', supabaseAuth.requireAnyPermission('overview', 'send'), (req, res) => {
+  return res.json({ jobs: store.listJobs() });
+});
 
-app.post('/api/send-jobs', async (req, res) => {
+app.post('/api/send-jobs', requireSend, async (req, res) => {
   await refreshConnectionState();
   if (!isReady) return res.status(409).json({ error: 'O WhatsApp não está conectado de verdade.' });
   const productIds = [...new Set(Array.isArray(req.body.productIds) ? req.body.productIds : [])];
