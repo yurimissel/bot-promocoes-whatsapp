@@ -1,4 +1,4 @@
-# PB Promoções v2.2
+# PB Promoções v2.3
 
 Painel web para cadastrar links `meli.la` já afiliados, selecionar grupos do
 WhatsApp e enviar ofertas com foto e mensagem personalizada.
@@ -14,6 +14,8 @@ WhatsApp e enviar ofertas com foto e mensagem personalizada.
 - Lista real dos grupos da conta conectada por QR Code.
 - Fila sequencial, histórico, confirmação do envio e erro detalhado.
 - Foto com fallback automático para texto.
+- Correção automática para a mudança de IDs do WhatsApp Web 2.3000.x (`r: r`).
+- Envio sem a opção instável que causava falso sucesso ou falso erro.
 - Sessão do WhatsApp e dados operacionais persistidos em `/app/data`.
 
 ## Publicação
@@ -43,6 +45,7 @@ no repositório.
 
 ```bash
 npm ci
+node scripts/patch-whatsapp-web.js
 npm test
 npm run web
 ```

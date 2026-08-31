@@ -1,4 +1,4 @@
-# PB Promoções v2.2 — publicação e acesso
+# PB Promoções v2.3 — publicação e acesso
 
 Esta versão mantém a sessão e os dados operacionais no volume `/app/data`,
 abre o cadastro ao público e deixa toda conta nova sem permissões. Somente o
@@ -66,6 +66,10 @@ configuração privada do serviço.
 4. Aguarde o serviço ficar saudável e mais 35 a 60 segundos para a sessão do
    WhatsApp ser carregada.
 
+Durante o build, o `Dockerfile` aplica automaticamente a compatibilidade exigida
+pelas versões atuais do WhatsApp Web. Não edite arquivos dentro de
+`node_modules` e não é necessário criar nenhuma variável adicional.
+
 O WhatsApp já conectado será reaproveitado pelo volume. Gere outro QR somente
 se a sessão tiver sido desconectada no celular.
 
@@ -87,8 +91,8 @@ sessão. A chave secreta nunca é enviada ao navegador.
 1. Cole um link `meli.la` que já seja seu link afiliado.
 2. Selecione o produto e apenas um grupo em que o número possa publicar.
 3. Clique em **Enviar ofertas**.
-4. O lote passa por `NA FILA`, `ENVIANDO` e só fica `CONCLUÍDO` depois do retorno
-   real do WhatsApp.
+4. O lote passa por `NA FILA`, `ENVIANDO` e só fica `CONCLUÍDO` depois que o
+   WhatsApp aceita e cria a mensagem de saída.
 5. Se a foto falhar, o painel tenta o texto com o link. Se o envio falhar, o
    motivo fica visível no histórico.
 

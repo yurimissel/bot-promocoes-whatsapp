@@ -44,6 +44,23 @@ function renderTemplate(template, product) {
   return message.replace(/\n{3,}/g, '\n\n').trim();
 }
 
+function serializedMessageId(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value._serialized === 'string') return value._serialized;
+  if (typeof value.$1 === 'string') return value.$1;
+
+  const remote = value.remote;
+  const serializedRemote = typeof remote === 'string'
+    ? remote
+    : (remote && (remote._serialized || remote.$1))
+      || (remote && remote.user && remote.server ? `${remote.user}@${remote.server}` : '');
+  if (typeof value.fromMe === 'boolean' && serializedRemote && value.id) {
+    return `${value.fromMe}_${serializedRemote}_${value.id}`;
+  }
+  return '';
+}
+
 async function downloadImage(imageUrl) {
   if (!imageUrl || !imageUrl.startsWith('https://')) return null;
   try {
@@ -62,7 +79,8 @@ async function downloadImage(imageUrl) {
 }
 
 function friendlySendError(error) {
-  const message = String((error && error.message) || 'Falha desconhecida no WhatsApp.');
+  const message = String((error && error.message) || error || 'Falha desconhecida no WhatsApp.').trim();
+  const stage = error && error.sendStage ? `${error.sendStage}: ` : '';
   if (/not a participant|not in (the )?group/i.test(message)) {
     return new Error('O número conectado não participa mais deste grupo.');
   }
@@ -75,21 +93,43 @@ function friendlySendError(error) {
   if (/evaluation failed|widfactory|serialize/i.test(message)) {
     return new Error(`O WhatsApp Web recusou o envio. Reconecte a sessão e tente novamente. Detalhe: ${message}`);
   }
-  return new Error(message);
+  if (/^(?:error:\s*)?[rt](?::\s*[rt])?$/i.test(message)) {
+    return new Error(`${stage}incompatibilidade interna do WhatsApp Web (erro ${message}). Aplique a versão 2.3 ou superior.`);
+  }
+  return new Error(`${stage}${message}`);
+}
+
+function atStage(stage, error) {
+  const normalized = error instanceof Error ? error : new Error(String(error || 'falha desconhecida'));
+  normalized.sendStage = stage;
+  return normalized;
 }
 
 async function resolveSendableChat(client, groupId) {
   if (!isGroupId(groupId)) throw new Error('O destino selecionado não é um grupo do WhatsApp.');
-  const state = await withTimeout(client.getState(), 12000, 'Verificação da conexão');
+  let state;
+  try {
+    state = await withTimeout(client.getState(), 12000, 'Verificação da conexão');
+  } catch (error) {
+    throw atStage('Verificação da conexão', error);
+  }
   if (state !== 'CONNECTED') throw new Error(`WhatsApp sem conexão no momento do envio (${state || 'desconectado'}).`);
 
-  const chat = await withTimeout(client.getChatById(groupId), 20000, 'Abertura do grupo');
+  let chat = null;
+  try {
+    chat = await withTimeout(client.getChatById(groupId), 20000, 'Abertura do grupo');
+  } catch (error) {
+    // O envio direto por ID ainda funciona quando apenas a leitura do modelo do chat falha.
+    logger.warn(`[Envio] Não foi possível pré-validar ${groupId}; enviando pelo ID:`, error.message);
+    return null;
+  }
   if (!chat || !chat.isGroup) throw new Error('O grupo selecionado não está mais disponível nesta conta.');
   if (chat.isReadOnly) throw new Error('Este WhatsApp não tem permissão para enviar mensagens nesse grupo.');
   return chat;
 }
 
 async function simulateTyping(chat, groupId) {
+  if (String(process.env.WHATSAPP_SIMULATE_TYPING || '').toLowerCase() !== 'true') return;
   try {
     if (chat && typeof chat.sendStateTyping === 'function') await chat.sendStateTyping();
     await wait(1000 + Math.floor(Math.random() * 1400));
@@ -97,6 +137,15 @@ async function simulateTyping(chat, groupId) {
   } catch (error) {
     logger.warn(`[Envio] Digitação indisponível em ${groupId}; continuando o envio:`, error.message);
   }
+}
+
+function assertMessageAccepted(message) {
+  if (!message) throw new Error('O WhatsApp não retornou a mensagem criada.');
+  const data = message._data || {};
+  if (message.isSendFailure === true || data.isSendFailure === true || message.ack === -1 || data.ack === -1) {
+    throw new Error('O WhatsApp recusou a mensagem antes de colocá-la para envio.');
+  }
+  return message;
 }
 
 async function sendConfirmedMessage(client, groupId, media, caption) {
@@ -108,11 +157,13 @@ async function sendConfirmedMessage(client, groupId, media, caption) {
         client.sendMessage(groupId, media, {
           caption,
           sendSeen: false,
-          waitUntilMsgSent: true,
+          linkPreview: false,
+          waitUntilMsgSent: false,
         }),
         60000,
         'Envio da foto'
       );
+      assertMessageAccepted(message);
     } catch (error) {
       mediaError = error.message;
       logger.warn(`[Envio] Foto falhou em ${groupId}; tentando somente o texto:`, error.message);
@@ -120,17 +171,22 @@ async function sendConfirmedMessage(client, groupId, media, caption) {
   }
 
   if (!message) {
-    message = await withTimeout(
-      client.sendMessage(groupId, caption, {
-        sendSeen: false,
-        waitUntilMsgSent: true,
-      }),
-      45000,
-      'Envio da mensagem'
-    );
+    try {
+      message = await withTimeout(
+        client.sendMessage(groupId, caption, {
+          sendSeen: false,
+          linkPreview: false,
+          waitUntilMsgSent: false,
+        }),
+        45000,
+        'Envio da mensagem'
+      );
+      assertMessageAccepted(message);
+    } catch (error) {
+      throw atStage('Envio da mensagem', error);
+    }
   }
 
-  if (!message) throw new Error('O WhatsApp não confirmou a criação da mensagem.');
   return { message, mode: media && !mediaError ? 'photo' : 'text', mediaError };
 }
 
@@ -174,7 +230,7 @@ async function runJob(client, job, options) {
           productId: product.id,
           groupId,
           status: 'sent',
-          messageId: sent.message.id && sent.message.id._serialized ? sent.message.id._serialized : '',
+          messageId: serializedMessageId(sent.message.id),
           mode: sent.mode,
           warning: sent.mediaError ? `A foto falhou; o texto foi enviado. ${sent.mediaError}` : '',
           sentAt: new Date().toISOString(),
@@ -238,4 +294,6 @@ module.exports = {
   sendConfirmedMessage,
   resolveSendableChat,
   friendlySendError,
+  serializedMessageId,
+  assertMessageAccepted,
 };

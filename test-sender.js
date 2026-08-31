@@ -6,7 +6,13 @@ const path = require('path');
 const testDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pb-sender-test-'));
 process.env.DATA_DIR = testDataDir;
 const store = require('./src/services/panelStore');
-const { enqueueJob, sendConfirmedMessage } = require('./src/services/panelSender');
+const {
+  enqueueJob,
+  sendConfirmedMessage,
+  friendlySendError,
+  serializedMessageId,
+  assertMessageAccepted,
+} = require('./src/services/panelSender');
 
 async function main() {
   const { product } = store.upsertProduct({
@@ -30,9 +36,9 @@ async function main() {
     getChats: async () => [{ isGroup: true, id: { _serialized: 'grupo@g.us' } }],
     getContacts: async () => [],
     getChatById: async () => fakeChat,
-    sendMessage: async (groupId, content) => {
-      messages.push({ groupId, content });
-      return { id: { _serialized: `mensagem-${messages.length}` } };
+    sendMessage: async (groupId, content, options) => {
+      messages.push({ groupId, content, options });
+      return { id: { $1: `mensagem-${messages.length}` }, ack: 0 };
     },
   };
 
@@ -57,16 +63,20 @@ async function main() {
   assert.strictEqual(messages.length, 1);
   assert.strictEqual(messages[0].groupId, 'grupo@g.us');
   assert.ok(messages[0].content.includes('https://meli.la/meu-link'));
+  assert.strictEqual(messages[0].options.waitUntilMsgSent, false);
+  assert.strictEqual(messages[0].options.linkPreview, false);
   assert.strictEqual(store.listProducts()[0].sendCount, 1);
+  assert.strictEqual(job.deliveries[0].messageId, 'mensagem-1');
 
   let attempts = 0;
   const fallbackClient = {
-    sendMessage: async (groupId, content) => {
+    sendMessage: async (groupId, content, options) => {
       attempts += 1;
       if (attempts === 1) throw new Error('falha simulada na foto');
       assert.strictEqual(groupId, 'grupo@g.us');
       assert.strictEqual(content, 'texto de fallback');
-      return { id: { _serialized: 'mensagem-fallback' } };
+      assert.strictEqual(options.waitUntilMsgSent, false);
+      return { id: { $1: 'mensagem-fallback' }, ack: 0 };
     },
   };
   const fallback = await sendConfirmedMessage(
@@ -76,8 +86,14 @@ async function main() {
     'texto de fallback'
   );
   assert.strictEqual(fallback.mode, 'text');
-  assert.strictEqual(fallback.message.id._serialized, 'mensagem-fallback');
+  assert.strictEqual(serializedMessageId(fallback.message.id), 'mensagem-fallback');
   assert.strictEqual(attempts, 2);
+
+  assert.throws(
+    () => assertMessageAccepted({ id: { $1: 'rejeitada' }, ack: -1 }),
+    /recusou a mensagem/
+  );
+  assert.match(friendlySendError(new Error('r')).message, /incompatibilidade interna/);
   console.log('Teste de envio: OK');
 }
 

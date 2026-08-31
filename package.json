@@ -1,6 +1,6 @@
 {
   "name": "promo-bot",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Painel PB Promoções para salvar e enviar ofertas pelo WhatsApp",
   "main": "web-setup.js",
   "scripts": {

@@ -25,7 +25,8 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
 
 COPY . .
 
-RUN mkdir -p /app/data/.wwebjs_auth /app/data/.wwebjs_cache \
+RUN node scripts/patch-whatsapp-web.js \
+    && mkdir -p /app/data/.wwebjs_auth /app/data/.wwebjs_cache \
     && rm -f /app/qr-code.png /app/qrcode.png \
     && chown -R node:node /app
 
